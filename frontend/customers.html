@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Customers</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-title" data-i18n="customerManagement">客户管理</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+  <button class="add-trigger" id="toggleForm" type="button">
+    <span data-i18n="addCustomer">+ 新增客户</span>
+  </button>
+
+  <form class="card collapsed-form" id="form" style="margin-top: 12px;">
+    <input type="hidden" id="id">
+    <label class="form-label" data-i18n="company">公司</label>
+    <input class="form-input" id="company" required>
+    <label class="form-label" style="margin-top: 12px;" data-i18n="contact">联系人</label>
+    <input class="form-input" id="contact">
+    <div style="display:flex; gap: 10px; margin-top: 12px;">
+      <div style="flex:1;">
+        <label class="form-label" data-i18n="phone">电话</label>
+        <input class="form-input" id="phone">
+      </div>
+      <div style="flex:1;">
+        <label class="form-label" data-i18n="email">邮箱</label>
+        <input class="form-input" id="email">
+      </div>
+    </div>
+    <label class="form-label" style="margin-top: 12px;" data-i18n="notes">备注</label>
+    <textarea class="form-textarea" id="notes" rows="2"></textarea>
+    <div style="display:flex; gap:10px; margin-top: 14px;">
+      <button class="btn btn-ghost" style="flex:1;" type="button" id="cancelBtn" data-i18n="cancel">取消</button>
+      <button class="btn btn-primary" style="flex:2;" type="submit" id="saveBtn" data-i18n="saveCustomer">保存客户</button>
+    </div>
+  </form>
+
+  <div id="customerQuickStats" class="customer-quick-stats"></div>
+
+  <div class="card" style="margin-top:12px;">
+    <label class="form-label" data-i18n="customerSearchLabel">搜索客户</label>
+    <input class="form-input" id="customerSearch" type="search" autocomplete="off" data-i18n-placeholder="customerSearchPlaceholder" placeholder="输入公司 / 联系人 / 电话 / 邮箱">
+    <div class="row-sub" id="customerSearchMeta" style="margin-top:8px;"></div>
+  </div>
+
+  <div id="list" class="card" style="padding:0; overflow:hidden; margin-top: 12px;"></div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = requireRolePage('boss');
+let customers = [];
+let firstLoad = true;
+let customerQuery = '';
+let highlightedCustomerId = null;
+
+const formEl = document.getElementById('form');
+const triggerEl = document.getElementById('toggleForm');
+const searchEl = document.getElementById('customerSearch');
+
+function setFormOpen(open) {
+  formEl.classList.toggle('open', open);
+  triggerEl.style.display = open ? 'none' : '';
+}
+
+triggerEl.addEventListener('click', () => {
+  clearForm();
+  setFormOpen(true);
+  document.getElementById('company').focus();
+});
+document.getElementById('cancelBtn').addEventListener('click', () => {
+  clearForm();
+  setFormOpen(false);
+});
+searchEl.addEventListener('input', (e) => {
+  customerQuery = e.target.value;
+  highlightedCustomerId = null;
+  renderList();
+});
+
+async function loadCustomers() {
+  if (firstLoad) {
+    document.getElementById('list').innerHTML = skeletonRows(4);
+  }
+  const data = await api('/api/customers');
+  customers = data.customers;
+  renderQuickStats();
+  renderList();
+  firstLoad = false;
+}
+
+function customerMetric(c, key) {
+  return Number(c && c[key] || 0);
+}
+
+function topCustomers(kind) {
+  const list = customers.filter(c => customerMetric(c, kind === 'major' ? 'total_pieces' : 'pickup_count') > 0);
+  const sorter = kind === 'major'
+    ? (a, b) => customerMetric(b, 'total_pieces') - customerMetric(a, 'total_pieces')
+      || customerMetric(b, 'order_count') - customerMetric(a, 'order_count')
+      || String(b.last_order_at || '').localeCompare(String(a.last_order_at || ''))
+    : (a, b) => customerMetric(b, 'pickup_count') - customerMetric(a, 'pickup_count')
+      || String(b.last_pickup_at || '').localeCompare(String(a.last_pickup_at || ''))
+      || customerMetric(b, 'total_pieces') - customerMetric(a, 'total_pieces');
+  return list.sort(sorter).slice(0, 6);
+}
+
+function renderQuickStats() {
+  const box = document.getElementById('customerQuickStats');
+  if (!customers.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const groups = [
+    {
+      title: t('majorCustomers'),
+      hint: t('majorCustomersHint'),
+      empty: t('majorCustomersEmpty'),
+      items: topCustomers('major'),
+      kind: 'major',
+    },
+    {
+      title: t('frequentCustomers'),
+      hint: t('frequentCustomersHint'),
+      empty: t('frequentCustomersEmpty'),
+      items: topCustomers('frequent'),
+      kind: 'frequent',
+    },
+  ];
+  box.innerHTML = groups.map(group => `
+    <section class="customer-rank-card" aria-label="${escAttr(group.title)}">
+      <div class="customer-rank-head">
+        <strong>${esc(group.title)}</strong>
+        <span>${esc(group.hint)}</span>
+      </div>
+      <div class="customer-rank-list">
+        ${group.items.length ? group.items.map(c => quickCustomerButton(c, group.kind)).join('') : `<div class="customer-rank-empty">${esc(group.empty)}</div>`}
+      </div>
+    </section>
+  `).join('');
+}
+
+function quickCustomerButton(c, kind) {
+  const primary = kind === 'major'
+    ? tn('piecesShortN', { n: customerMetric(c, 'total_pieces') })
+    : tn('pickupBatchesN', { n: customerMetric(c, 'pickup_count') });
+  const secondary = tn('ordersShortN', { n: customerMetric(c, 'order_count') });
+  return `
+    <button class="customer-rank-pill" type="button" onclick="focusCustomer(${c.id})">
+      <span>${esc(c.company)}</span>
+      <small>${esc(primary)} · ${esc(secondary)}</small>
+    </button>
+  `;
+}
+
+function focusCustomer(id) {
+  const c = customers.find(x => Number(x.id) === Number(id));
+  if (!c) return;
+  highlightedCustomerId = c.id;
+  customerQuery = c.company || '';
+  searchEl.value = customerQuery;
+  renderList();
+  requestAnimationFrame(() => {
+    const row = document.querySelector(`[data-cid="${c.id}"]`);
+    if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+function renderList() {
+  const list = document.getElementById('list');
+  const rows = customerQuery
+    ? customers.filter(c => customerSearchText(c).includes(normText(customerQuery)))
+    : customers;
+  document.getElementById('customerSearchMeta').textContent = customers.length
+    ? tn('customerSearchResultCount', { shown: rows.length, total: customers.length })
+    : '';
+  if (!customers.length) {
+    list.innerHTML = emptyState(t('customersEmpty'));
+    return;
+  }
+  if (!rows.length) {
+    list.innerHTML = emptyState(t('customerSearchEmpty'));
+    return;
+  }
+  list.innerHTML = rows.map(c => {
+    const hasEmail = !!c.email;
+    return `
+    <div class="row ${Number(highlightedCustomerId) === Number(c.id) ? 'customer-row-highlight' : ''}" data-cid="${c.id}">
+      <div style="flex:1;">
+        <div class="row-title">${esc(c.company)}</div>
+        <div class="row-sub">${esc(c.contact_name || '—')} · ${esc(c.phone || t('noPhone'))} · ${esc(c.email || t('noEmail'))}</div>
+        <div class="row-sub customer-business-line">${esc(customerBusinessLine(c))}</div>
+      </div>
+      <button class="btn btn-primary" style="padding:9px 12px; min-height:0; font-size:13px; ${hasEmail ? '' : 'opacity:.45;'}" onclick="sendCustomerSlip(${c.id}, this)">${esc(t('emailSlip'))}</button>
+      <button class="menu-trigger" type="button" onclick="customerMenu(event, ${c.id})" aria-label="more">⋯</button>
+    </div>`;
+  }).join('');
+}
+
+function customerBusinessLine(c) {
+  return [
+    tn('ordersShortN', { n: customerMetric(c, 'order_count') }),
+    tn('piecesShortN', { n: customerMetric(c, 'total_pieces') }),
+    tn('pickupBatchesN', { n: customerMetric(c, 'pickup_count') }),
+  ].join(' · ');
+}
+
+function customerMenu(event, id) {
+  event.stopPropagation();
+  popMenu(event.currentTarget, [
+    { label: t('edit'), onClick: () => editCustomer(id) },
+    { label: t('delete'), danger: true, onClick: () => deleteCustomer(id) },
+  ]);
+}
+
+function formData() {
+  return {
+    company: document.getElementById('company').value.trim(),
+    contact_name: document.getElementById('contact').value.trim(),
+    phone: document.getElementById('phone').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    notes: document.getElementById('notes').value.trim(),
+  };
+}
+
+function clearForm() {
+  formEl.reset();
+  document.getElementById('id').value = '';
+  document.getElementById('saveBtn').textContent = t('saveCustomer');
+}
+
+function editCustomer(id) {
+  const c = customers.find(x => x.id === id);
+  if (!c) return;
+  document.getElementById('id').value = c.id;
+  document.getElementById('company').value = c.company || '';
+  document.getElementById('contact').value = c.contact_name || '';
+  document.getElementById('phone').value = c.phone || '';
+  document.getElementById('email').value = c.email || '';
+  document.getElementById('notes').value = c.notes || '';
+  document.getElementById('saveBtn').textContent = t('updateCustomer');
+  setFormOpen(true);
+  scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function sendCustomerSlip(id, btn) {
+  const c = customers.find(x => x.id === id);
+  if (c && !c.email) return toast(t('noEmailToast'), { type: 'danger' });
+  await withBusy(btn, async () => {
+    try {
+      const data = await api('/api/customers/' + id + '/send-slip', { method: 'POST' });
+      const skipped = data.mail && data.mail.skipped;
+      toast(
+        skipped ? tn('slipSkipped', { reason: data.mail.reason || '' }) : t('slipSent'),
+        { type: skipped ? '' : 'success' },
+      );
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+}
+
+async function deleteCustomer(id) {
+  const c = customers.find(x => x.id === id);
+  const label = c ? c.company : '';
+  const ok = await confirmModal({
+    title: tn('deleteCustomerQ', { name: label }),
+    body: t('deleteCustomerBody'),
+    confirmText: t('delete'),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api('/api/customers/' + id, { method: 'DELETE' });
+    toast(t('deleted'), { type: 'success' });
+    await loadCustomers();
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+formEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('id').value;
+  const method = id ? 'PUT' : 'POST';
+  const url = id ? '/api/customers/' + id : '/api/customers';
+  const saveBtn = document.getElementById('saveBtn');
+  await withBusy(saveBtn, async () => {
+    try {
+      await api(url, { method, body: formData() });
+      clearForm();
+      setFormOpen(false);
+      toast(id ? t('updated') : t('added'), { type: 'success' });
+      await loadCustomers();
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+});
+
+function onLangChange() {
+  renderQuickStats();
+  renderList();
+}
+function loadCustomersOrError() {
+  loadCustomers().catch(err => {
+    document.getElementById('list').innerHTML = errorState(err.message, t('retry'), loadCustomersOrError);
+    toast(err.message, { type: 'danger' });
+  });
+}
+if (pageAllowed) {
+  injectBossNav('customers');
+  loadCustomersOrError();
+}
+</script>
+</body>
+</html>

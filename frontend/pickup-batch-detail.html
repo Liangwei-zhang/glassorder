@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Pickup Batch</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <a href="pickup-batches.html" class="back-btn">‹</a>
+  <div class="topbar-title" id="title" data-i18n="pickupBatchDetail">提货批次</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col boss-shell" style="padding:16px;">
+  <div id="body"></div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = requireRolePage('boss');
+if (pageAllowed) injectBossNav('pickup');
+const id = new URLSearchParams(location.search).get('id');
+let batch = null;
+
+async function loadBatch() {
+  const data = await api('/api/pickups/batches/' + id);
+  batch = data.batch;
+  render();
+}
+
+function groupedItems() {
+  const map = new Map();
+  for (const item of batch.items || []) {
+    if (!map.has(item.order_id)) map.set(item.order_id, { order_number: item.order_number, project_name: item.project_name, items: [] });
+    map.get(item.order_id).items.push(item);
+  }
+  return [...map.values()];
+}
+
+function render() {
+  if (!batch) return;
+  document.getElementById('title').textContent = batch.batch_number;
+  document.getElementById('body').innerHTML = `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="row-title">${esc(batch.company)}</div>
+      <div class="row-sub">${esc(batch.signer_name)} · ${esc(batch.signer_phone || t('noPhone'))} · ${esc(relativeTime(batch.picked_at))}</div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn btn-ghost" style="flex:1;" onclick="window.print()">${esc(t('printBtn'))}</button>
+        <a class="btn btn-primary" style="flex:1; text-decoration:none;" href="${escAttr(batch.slip_pdf_path)}" target="_blank">${esc(t('downloadPdfBtn'))}</a>
+      </div>
+    </div>
+    ${groupedItems().map(group => `
+      <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
+        <div style="padding:12px 14px; background:var(--surface-2);">
+          <div class="row-title">#${esc(group.order_number)}</div>
+          <div class="row-sub">${esc(group.project_name || '')}</div>
+        </div>
+        ${group.items.map(item => `
+          <div class="row">
+            <div style="flex:1;">
+              <div class="row-title">${esc(tn('pieceN', { n: item.piece_no }))}</div>
+              <div class="row-sub">${esc(item.size || '')} ${item.reverted_at ? '· ' + esc(t('reverted')) : ''}</div>
+            </div>
+            ${item.reverted_at ? `<span class="badge badge-rework">${esc(t('reverted'))}</span>` : `<button class="btn btn-ghost" style="padding:8px 10px; min-height:0;" onclick="revertPiece(${item.piece_id})">${esc(t('revert'))}</button>`}
+          </div>`).join('')}
+      </div>`).join('')}
+  `;
+}
+
+async function revertPiece(pieceId) {
+  const reason = prompt(t('revertReasonPrompt'));
+  if (!reason) return;
+  try {
+    const data = await api('/api/pickups/batches/' + batch.id + '/revert', {
+      method: 'POST',
+      body: { piece_ids: [pieceId], reason },
+    });
+    batch = data.batch;
+    render();
+    toast(t('pickupReverted'), { type:'success' });
+  } catch (err) {
+    toast(err.message, { type:'danger' });
+  }
+}
+function onLangChange() { render(); }
+if (pageAllowed) {
+  loadBatch().catch(err => {
+    document.getElementById('body').innerHTML = errorState(err.message, t('retry'), loadBatch);
+  });
+}
+</script>
+<style>
+@media print {
+  .topbar, .bottom-nav, button { display:none !important; }
+  body { background:white; }
+  .card { box-shadow:none; border:1px solid var(--border-1); }
+}
+</style>
+</body>
+</html>

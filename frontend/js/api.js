@@ -1,0 +1,654 @@
+const API_BASE = '';
+const TOKEN_KEY = 'glassorder_token';
+const USER_KEY = 'glassorder_user';
+
+// PWA: register service worker + inject manifest/iOS meta tags once per page load.
+(function injectPwaTags() {
+  if (typeof document === 'undefined') return;
+  const head = document.head;
+  if (!head) return;
+  if (!head.querySelector('link[rel="manifest"]')) {
+    const m = document.createElement('link');
+    m.rel = 'manifest';
+    m.href = '/manifest.json';
+    head.appendChild(m);
+  }
+  if (!head.querySelector('meta[name="theme-color"]')) {
+    const tc = document.createElement('meta');
+    tc.name = 'theme-color';
+    tc.content = '#18181b';
+    head.appendChild(tc);
+  }
+  if (!head.querySelector('link[rel="apple-touch-icon"]')) {
+    const a = document.createElement('link');
+    a.rel = 'apple-touch-icon';
+    a.href = '/icons/apple-touch-icon.png';
+    head.appendChild(a);
+  }
+  if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+    const am = document.createElement('meta');
+    am.name = 'apple-mobile-web-app-capable';
+    am.content = 'yes';
+    head.appendChild(am);
+  }
+  if (!head.querySelector('meta[name="mobile-web-app-capable"]')) {
+    const mw = document.createElement('meta');
+    mw.name = 'mobile-web-app-capable';
+    mw.content = 'yes';
+    head.appendChild(mw);
+  }
+  if (!head.querySelector('meta[name="apple-mobile-web-app-title"]')) {
+    const at = document.createElement('meta');
+    at.name = 'apple-mobile-web-app-title';
+    at.content = 'Glass';
+    head.appendChild(at);
+  }
+})();
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  // One-shot cache nuke for this release — guarantees stale 'stale-while-revalidate'
+  // caches from earlier SW versions cannot serve outdated HTML.
+  const NUKE_KEY = '__sw_nuke_2026_05_20_customer_quick__';
+  if (!localStorage.getItem(NUKE_KEY)) {
+    localStorage.setItem(NUKE_KEY, '1');
+    if (window.caches && caches.keys) {
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {});
+    }
+    if (navigator.serviceWorker.getRegistrations) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister().catch(() => {}));
+      }).catch(() => {});
+    }
+  }
+
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // Force update check on every page load — sw.js itself is no-cache,
+      // so a server-side change ships within one navigation.
+      reg.update().catch(() => {});
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'activated' && navigator.serviceWorker.controller) {
+            if (!sessionStorage.getItem('__sw_reloaded__')) {
+              sessionStorage.setItem('__sw_reloaded__', '1');
+              location.reload();
+            }
+          }
+        });
+      });
+    }).catch(() => {});
+    setTimeout(() => sessionStorage.removeItem('__sw_reloaded__'), 5000);
+  });
+}
+const STAGES = ['cut', 'edge', 'tempered', 'finished'];
+// Backwards-compat: STAGE_ZH proxy resolves through i18n at access time.
+const STAGE_ZH = new Proxy({}, {
+  get(_, key) {
+    return typeof stageLabel === 'function' ? stageLabel(key) : key;
+  },
+});
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function getUser() {
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (err) { return null; }
+}
+
+function setSession(token, user) {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+function logout() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  location.href = 'login.html';
+}
+
+function ensureAuth() {
+  if (!getToken()) {
+    location.href = 'login.html';
+    return false;
+  }
+  return true;
+}
+
+// Redirect non-matching roles away from a page. Returns true if user passes.
+// Worker visiting a boss-only page is sent to their workstation.
+function requireRolePage(...allowed) {
+  if (!ensureAuth()) return false;
+  const user = getUser();
+  if (!user || !allowed.includes(user.role)) {
+    if (user && user.role === 'worker') {
+      location.replace('worker-queue.html');
+    } else {
+      location.replace('index.html');
+    }
+    return false;
+  }
+  return true;
+}
+
+function bossNav(active) {
+  const items = [
+    ['orders', 'boss-dashboard.html', '订单', 'navOrders'],
+    ['shop', 'worker-queue.html', '车间', 'navShop'],
+    ['pickup', 'pickup-batches.html', '取货', 'navPickup'],
+    ['customers', 'customers.html', '客户', 'navCustomers'],
+    ['summary', 'summary.html', '汇总', 'navSummary'],
+  ];
+  return `<nav class="bottom-nav" aria-label="boss navigation">${items.map(([key, href, fallback, labelKey]) => `
+    <a href="${href}" class="${key === active ? 'active' : ''}">
+      <span class="nav-icon">${key === 'orders' ? '□' : key === 'shop' ? '◇' : key === 'pickup' ? '✓' : key === 'customers' ? '○' : '∑'}</span>
+      <span>${esc(typeof t === 'function' ? t(labelKey) : fallback)}</span>
+    </a>`).join('')}</nav>`;
+}
+
+function injectBossNav(active) {
+  document.body.classList.add('has-bottom-nav');
+  if (document.querySelector('.bottom-nav')) return;
+  document.body.insertAdjacentHTML('beforeend', bossNav(active));
+}
+
+async function api(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const token = getToken();
+  if (token && options.auth !== false) headers.set('Authorization', `Bearer ${token}`);
+
+  let body = options.body;
+  if (body && !(body instanceof FormData) && typeof body !== 'string') {
+    headers.set('Content-Type', 'application/json');
+    body = JSON.stringify(body);
+  }
+
+  let res;
+  try {
+    res = await fetch(API_BASE + path, { ...options, headers, body });
+  } catch (err) {
+    const message = typeof t === 'function' ? t('networkError') : 'Network error';
+    const error = new Error(message);
+    error.cause = err;
+    throw error;
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (err) { data = text; }
+  if (res.status === 401 && options.auth !== false && !path.startsWith('/api/auth/')) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    if (!location.pathname.endsWith('/login.html') && !location.pathname.endsWith('login.html')) {
+      location.href = 'login.html';
+    }
+  }
+  if (!res.ok) {
+    const fallback = (typeof t === 'function' ? t('requestFailed') : 'Request failed');
+    const message = data && data.error ? data.error : `${fallback} (${res.status})`;
+    const error = new Error(message);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+async function login(loginName, password) {
+  const data = await api('/api/auth/login', {
+    method: 'POST',
+    auth: false,
+    body: { login: loginName, password },
+  });
+  setSession(data.token, data.user);
+  return data.user;
+}
+
+function pieceClass(p) {
+  if (p.broken) return 'piece broken';
+  if (p.rework) return 'piece rework';
+  if (p.hold) return 'piece hold';
+  if (p.stage === 'finished') return 'piece done';
+  return 'piece pending';
+}
+
+function orderProgress(o) {
+  const total = Number(o.total_pieces || (o.pieces ? o.pieces.length : 0));
+  if (!total) return 0;
+  const finished = Number(o.finished_pieces || (o.pieces ? o.pieces.filter(p => p.stage === 'finished').length : 0));
+  return Math.round((finished / total) * 100);
+}
+
+function reworkCount(o) {
+  if (o.rework_pieces !== undefined) return Number(o.rework_pieces || 0);
+  return (o.pieces || []).filter(p => p.rework).length;
+}
+
+function brokenCount(o) {
+  if (o.broken_pieces !== undefined) return Number(o.broken_pieces || 0);
+  return (o.pieces || []).filter(p => p.broken).length;
+}
+
+function orderTitle(o) {
+  return `#${esc(o.order_number)} · ${esc(o.company)}`;
+}
+
+function isOverdue(o) {
+  if (o.archived_at || !o.deadline || o.status === 'ready_pickup' || o.status === 'picked_up') return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const deadline = new Date(o.deadline + 'T00:00:00');
+  return deadline < today;
+}
+
+function statusBadge(o) {
+  if (o.archived_at) return `<span class="badge badge-done">${esc(t('statusArchived'))}</span>`;
+  if (o.pickup_status === 'partial') return `<span class="badge badge-pickup">${esc(t('statusPartialPickup'))}</span>`;
+  if (o.status === 'ready_pickup') return `<span class="badge badge-pickup">${esc(t('statusReadyPickup'))}</span>`;
+  if (o.status === 'picked_up') return `<span class="badge badge-done">${esc(t('statusPickedUp'))}</span>`;
+  return `<span class="badge badge-prod">${esc(t('statusInProduction'))}</span>`;
+}
+
+function toast(msg, opts) {
+  if (msg === undefined || msg === null) return;
+  const variant = opts && opts.type ? String(opts.type) : '';
+  let stack = document.getElementById('toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    stack.className = 'toast-stack';
+    stack.setAttribute('role', 'status');
+    stack.setAttribute('aria-live', 'polite');
+    document.body.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast' + (variant ? ' ' + variant : '');
+  el.textContent = String(msg);
+  stack.appendChild(el);
+  // cap stack at 4 entries — drop the oldest
+  while (stack.children.length > 4) {
+    const old = stack.firstElementChild;
+    if (!old) break;
+    old.remove();
+  }
+  const TTL = (opts && opts.ttl) || 2600;
+  setTimeout(() => {
+    el.classList.add('toast-leave');
+    setTimeout(() => el.remove(), 220);
+  }, TTL);
+}
+
+function esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escAttr(v) {
+  return esc(v);
+}
+
+function normText(v) {
+  return String(v || '').toLowerCase().replace(/\s+/g, '');
+}
+
+function customerSearchText(c) {
+  return normText([
+    c && c.company,
+    c && c.contact_name,
+    c && c.phone,
+    c && c.email,
+    c && c.notes,
+  ].filter(Boolean).join(' '));
+}
+
+function customerLabel(c) {
+  if (!c) return '';
+  return [c.company, c.contact_name, c.phone].filter(Boolean).join(' · ');
+}
+
+function initCustomerPicker({ root, customers, onSelect, placeholder, emptyText } = {}) {
+  const el = typeof root === 'string' ? document.querySelector(root) : root;
+  if (!el) throw new Error('customer picker root missing');
+  let list = Array.isArray(customers) ? customers.slice() : [];
+  let selectedId = '';
+  let activeIndex = 0;
+  let open = false;
+  const ph = placeholder || t('customerSearchPlaceholder');
+  const empty = emptyText || t('customerSearchEmpty');
+
+  el.className = (el.className ? el.className + ' ' : '') + 'customer-picker';
+  el.innerHTML = `
+    <input class="form-input" type="search" autocomplete="off" id="${escAttr(el.id || 'customerPicker')}-input" placeholder="${escAttr(ph)}">
+    <span class="customer-picker-count"></span>
+    <input type="hidden" class="customer-picker-value">
+    <div class="customer-picker-results" hidden></div>`;
+
+  const input = el.querySelector('input[type="search"]');
+  const count = el.querySelector('.customer-picker-count');
+  const value = el.querySelector('.customer-picker-value');
+  const results = el.querySelector('.customer-picker-results');
+
+  function filtered() {
+    const q = normText(input.value);
+    if (!q) return list.slice(0, 40);
+    return list
+      .map((c, index) => {
+        const fields = [c.company, c.contact_name, c.phone, c.email].map(normText);
+        const haystack = customerSearchText(c);
+        if (!haystack.includes(q)) return null;
+        let score = 40;
+        if (fields.some((f) => f === q)) score = 0;
+        else if (fields.some((f) => f.startsWith(q))) score = 1;
+        else {
+          const best = fields.reduce((min, f) => {
+            const pos = f.indexOf(q);
+            return pos >= 0 ? Math.min(min, pos) : min;
+          }, 999);
+          score = Math.min(30, best);
+        }
+        return { c, score, index };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.score - b.score || a.index - b.index)
+      .slice(0, 40)
+      .map((row) => row.c);
+  }
+
+  function render() {
+    const rows = filtered();
+    count.textContent = list.length ? tn('customerSearchCount', { n: list.length }) : '';
+    activeIndex = Math.max(0, Math.min(activeIndex, rows.length - 1));
+    if (!open) {
+      results.hidden = true;
+      return;
+    }
+    results.hidden = false;
+    if (!rows.length) {
+      results.innerHTML = `<div class="customer-picker-empty">${esc(empty)}</div>`;
+      return;
+    }
+    results.innerHTML = rows.map((c, i) => `
+      <button type="button" class="customer-picker-option ${i === activeIndex ? 'active' : ''}" data-id="${c.id}">
+        <div class="customer-picker-name">${esc(c.company || '')}</div>
+        <div class="customer-picker-meta">${esc([c.contact_name, c.phone, c.email].filter(Boolean).join(' · ') || t('noPhone'))}</div>
+      </button>`).join('');
+  }
+
+  function choose(id) {
+    const c = list.find((item) => String(item.id) === String(id));
+    if (!c) return;
+    selectedId = String(c.id);
+    value.value = selectedId;
+    input.value = customerLabel(c);
+    open = false;
+    render();
+    if (typeof onSelect === 'function') onSelect(c);
+  }
+
+  input.addEventListener('input', () => {
+    selectedId = '';
+    value.value = '';
+    activeIndex = 0;
+    open = true;
+    render();
+  });
+  input.addEventListener('focus', () => {
+    open = true;
+    render();
+  });
+  input.addEventListener('keydown', (e) => {
+    const rows = filtered();
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      open = true;
+      activeIndex = Math.min(rows.length - 1, activeIndex + 1);
+      render();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIndex = Math.max(0, activeIndex - 1);
+      render();
+    } else if (e.key === 'Enter') {
+      if (open && rows[activeIndex]) {
+        e.preventDefault();
+        choose(rows[activeIndex].id);
+      }
+    } else if (e.key === 'Escape') {
+      open = false;
+      render();
+    }
+  });
+  results.addEventListener('mousedown', (e) => {
+    const opt = e.target.closest('.customer-picker-option');
+    if (!opt) return;
+    e.preventDefault();
+    choose(opt.dataset.id);
+  });
+  document.addEventListener('click', (e) => {
+    if (!el.contains(e.target)) {
+      open = false;
+      render();
+    }
+  });
+
+  render();
+
+  return {
+    setCustomers(nextCustomers) {
+      list = Array.isArray(nextCustomers) ? nextCustomers.slice() : [];
+      selectedId = '';
+      value.value = '';
+      input.value = '';
+      activeIndex = 0;
+      render();
+    },
+    select(id) { choose(id); },
+    getValue() { return selectedId || value.value || ''; },
+    getSelected() { return list.find((c) => String(c.id) === String(this.getValue())) || null; },
+    focus() { input.focus(); },
+  };
+}
+
+function emptyState(text, icon) {
+  // Default uses an inline SVG mark — avoids hex/emoji noise and matches the design system.
+  const safeIcon = icon
+    ? `<div style="font-size:40px; margin-bottom:10px;">${esc(icon)}</div>`
+    : `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-3); margin-bottom:10px;" aria-hidden="true">
+         <circle cx="12" cy="12" r="9"></circle>
+         <line x1="8" y1="12" x2="16" y2="12"></line>
+       </svg>`;
+  return `<div class="empty-state">${safeIcon}<div>${esc(text)}</div></div>`;
+}
+
+let _popMenuClose = null;
+function popMenu(anchorEl, items) {
+  closePopMenu();
+  if (!anchorEl) return;
+  const rect = anchorEl.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'menu-pop';
+  menu.innerHTML = items.map((item, i) => {
+    if (item.divider) return '<div class="menu-divider"></div>';
+    const cls = item.danger ? 'danger' : '';
+    const dis = item.disabled ? 'disabled' : '';
+    return `<button data-idx="${i}" class="${cls}" ${dis}>${esc(item.label)}</button>`;
+  }).join('');
+  // Position off-screen first to measure size, then snap to a viewport-safe spot.
+  menu.style.visibility = 'hidden';
+  menu.style.top = '0px';
+  menu.style.left = '0px';
+  document.body.appendChild(menu);
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const mw = menu.offsetWidth;
+  const mh = menu.offsetHeight;
+  const margin = 8;
+  // Cap to viewport height (allow scrolling inside if too tall).
+  if (mh > vh - margin * 2) {
+    menu.style.maxHeight = (vh - margin * 2) + 'px';
+    menu.style.overflowY = 'auto';
+  }
+  // Vertical: prefer below anchor; flip up if below would overflow.
+  let top = rect.bottom + 6;
+  if (top + mh > vh - margin) {
+    top = Math.max(margin, rect.top - mh - 6);
+  }
+  // Horizontal: prefer right-aligned to anchor; clamp into viewport.
+  let left = rect.right - mw;
+  if (left < margin) left = margin;
+  if (left + mw > vw - margin) left = vw - margin - mw;
+  menu.style.top = top + 'px';
+  menu.style.left = left + 'px';
+  menu.style.right = 'auto';
+  menu.style.visibility = 'visible';
+
+  function close() {
+    if (menu.parentNode) menu.remove();
+    document.removeEventListener('click', onDocClick, true);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', close);
+    window.removeEventListener('scroll', close, true);
+    _popMenuClose = null;
+  }
+  function onDocClick(e) {
+    if (menu.contains(e.target)) return;
+    close();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+  }
+  menu.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-idx]');
+    if (!btn || btn.disabled) return;
+    const item = items[Number(btn.dataset.idx)];
+    close();
+    if (item && typeof item.onClick === 'function') item.onClick();
+  });
+  _popMenuClose = close;
+  setTimeout(() => {
+    document.addEventListener('click', onDocClick, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+  }, 0);
+}
+
+function closePopMenu() {
+  if (_popMenuClose) _popMenuClose();
+  document.querySelectorAll('.menu-pop').forEach((m) => m.remove());
+}
+
+function confirmModal({ title, body, confirmText, cancelText, danger = false } = {}) {
+  const ok = confirmText || t('confirm');
+  const no = cancelText || t('cancel');
+  const ttl = title || t('confirmTitle');
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-backdrop';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = `
+      <div class="modal">
+        <div style="text-align:center; margin-bottom: 12px;">
+          <div style="font-size: 20px; font-weight: 700; letter-spacing:-0.01em;">${esc(ttl)}</div>
+          ${body ? `<div style="color:var(--text-2); margin-top: 8px; font-size: 14px;">${esc(body)}</div>` : ''}
+        </div>
+        <div style="display:flex; gap: 10px; margin-top: 14px;">
+          <button class="btn btn-ghost" style="flex:1;" data-role="cancel" type="button">${esc(no)}</button>
+          <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" style="flex:1;" data-role="ok" type="button">${esc(ok)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    const okBtn = overlay.querySelector('[data-role="ok"]');
+    setTimeout(() => { try { okBtn.focus(); } catch (e) {} }, 30);
+
+    let settled = false;
+    function close(result) {
+      if (settled) return;
+      settled = true;
+      overlay.classList.remove('open');
+      document.removeEventListener('keydown', onKey, true);
+      setTimeout(() => overlay.remove(), 220);
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); close(false); }
+      else if (e.key === 'Enter') { e.stopPropagation(); close(true); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(false);
+      const role = e.target && e.target.dataset && e.target.dataset.role;
+      if (role === 'cancel') close(false);
+      if (role === 'ok') close(true);
+    });
+  });
+}
+
+// Shows a button as busy: disabled + spinner via CSS aria-busy.
+// Wraps an async function; restores label on completion.
+function withBusy(btn, fn, restoreLabel) {
+  if (!btn) return fn();
+  if (btn.dataset.busy === '1') return Promise.resolve();
+  const original = restoreLabel || btn.textContent;
+  btn.dataset.busy = '1';
+  btn.setAttribute('aria-busy', 'true');
+  btn.disabled = true;
+  return Promise.resolve()
+    .then(() => fn())
+    .finally(() => {
+      btn.removeAttribute('aria-busy');
+      btn.disabled = false;
+      btn.dataset.busy = '';
+      btn.textContent = original;
+    });
+}
+
+let _errorStateSeq = 0;
+function errorState(message, actionLabel, action) {
+  const retryId = 'retry-action-' + (++_errorStateSeq);
+  const retry = actionLabel && action
+    ? `<button class="btn btn-primary cta" type="button" id="${retryId}" style="margin-top:14px;">${esc(actionLabel)}</button>`
+    : '';
+  setTimeout(() => {
+    const btn = document.getElementById(retryId);
+    if (btn && action) btn.onclick = action;
+  }, 0);
+  return `<div class="empty-state">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--danger); margin-bottom:10px;" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"></circle>
+      <line x1="12" y1="8" x2="12" y2="12"></line>
+      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+    <div>${esc(message || (typeof t === 'function' ? t('requestFailed') : 'Request failed'))}</div>
+    ${retry}
+  </div>`;
+}
+
+// Skeleton row HTML for list placeholders while data loads.
+function skeletonRows(n) {
+  let html = '<div class="card" style="padding:0; overflow:hidden;">';
+  for (let i = 0; i < n; i += 1) {
+    html += `<div class="skel-row">
+      <div class="skel" style="height:14px; width:${50 + (i % 3) * 12}%;"></div>
+      <div class="skel" style="height:11px; width:${30 + (i % 3) * 8}%; margin-top:8px;"></div>
+    </div>`;
+  }
+  return html + '</div>';
+}
+
+if (typeof window !== 'undefined') {
+  Object.assign(window, {
+    initCustomerPicker,
+    customerSearchText,
+    normText,
+  });
+}

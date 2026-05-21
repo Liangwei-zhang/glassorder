@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Order Detail</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <a href="boss-dashboard.html" class="back-btn">‹</a>
+  <div class="topbar-title" id="title" data-i18n="orderDetail">订单详情</div>
+  <button class="menu-trigger" id="kebab" type="button" onclick="openOrderMenu(event)" aria-label="more">⋯</button>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+  <div id="body"></div>
+</div>
+
+<div class="action-bar" id="actions"></div>
+
+<div class="modal-backdrop" id="editModal">
+  <div class="modal">
+    <div style="font-size:20px; font-weight:800; margin-bottom:12px;" data-i18n="editOrder">修改订单</div>
+    <label class="form-label" data-i18n="project">项目</label>
+    <input class="form-input" id="editProject">
+    <label class="form-label" style="margin-top:10px;" data-i18n="priority">优先级</label>
+    <select class="form-select" id="editPriority">
+      <option value="normal" data-i18n="priorityNormal">正常</option>
+      <option value="rush" data-i18n="priorityRush">加急</option>
+      <option value="rework" data-i18n="priorityRework">返工</option>
+    </select>
+    <label class="form-label" style="margin-top:10px;" data-i18n="deadline">计划日期</label>
+    <input class="form-input" id="editDeadline" type="date">
+    <label class="form-label" style="margin-top:10px;" data-i18n="note">备注</label>
+    <textarea class="form-textarea" id="editNote" rows="2"></textarea>
+    <div style="font-weight:700; margin-top:14px;" data-i18n="pieceNotes">片子工序 / 备注</div>
+    <div id="editPieces" style="max-height:40vh; overflow:auto; margin-top:6px;"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="closeEdit()" data-i18n="cancel">取消</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="saveEdit(event)" data-i18n="saveChanges">保存修改</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = requireRolePage('boss');
+const id = new URLSearchParams(location.search).get('id');
+let order = null;
+
+async function loadOrder() {
+  if (!order) {
+    document.getElementById('body').innerHTML = `
+      <div class="card" style="margin-bottom:12px;">
+        <div class="skel" style="height:14px; width:40%;"></div>
+        <div class="skel" style="height:24px; width:30%; margin-top:8px;"></div>
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;">
+          <div class="skel" style="height:46px;"></div>
+          <div class="skel" style="height:46px;"></div>
+          <div class="skel" style="height:46px;"></div>
+        </div>
+      </div>
+      <div class="card"><div class="skel" style="height:12px; width:30%;"></div>
+        <div class="skel" style="height:12px; width:70%; margin-top:10px;"></div>
+        <div class="skel" style="height:12px; width:55%; margin-top:10px;"></div>
+      </div>`;
+  }
+  const data = await api('/api/orders/' + id);
+  order = data.order;
+  render();
+}
+
+function render() {
+  if (!order) {
+    document.getElementById('body').innerHTML = `<div class="card">${esc(t('requestFailed'))}</div>`;
+    return;
+  }
+  document.getElementById('title').textContent = `#${order.order_number} · ${order.company}`;
+  const backHref = order.archived_at ? 'boss-dashboard.html?archived=1' : 'boss-dashboard.html';
+  const backBtn = document.querySelector('.back-btn');
+  if (backBtn) backBtn.href = backHref;
+  const pct = orderProgress(order);
+  const rw = reworkCount(order);
+  const bk = brokenCount(order);
+  const byStage = {};
+  STAGES.forEach(s => byStage[s] = 0);
+  order.pieces.forEach(p => { if (byStage[p.stage] !== undefined) byStage[p.stage] += 1; });
+
+  const stageRow = STAGES.map(s => {
+    const count = byStage[s];
+    const dotClass = s === 'finished' ? 'dot-done' : (count > 0 ? 'dot-doing' : 'dot-pending');
+    const label = stageLabel(s);
+    return `
+      <div class="card" style="padding: 12px; margin-bottom: 8px;">
+        <div style="display:flex; align-items:center; gap: 12px;">
+          <span class="dot ${dotClass}" style="width:10px; height:10px; margin:0;"></span>
+          <div style="flex:1; font-weight: 600;">${esc(label)}</div>
+          <div class="num title-tight" style="font-weight: 700; font-size: 20px; color: ${count > 0 && s !== 'finished' ? 'var(--warn)' : 'var(--success)'};">${count}</div>
+        </div>
+      </div>`;
+  }).join('');
+  const reworkPieces = order.pieces.filter(p => p.rework).map(p => p.piece_no);
+  const holdPieces = order.pieces.filter(p => p.hold).map(p => p.piece_no);
+
+  document.getElementById('body').innerHTML = `
+    <div class="card" style="margin-bottom: 12px;">
+      <div style="display:flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div style="font-size: 14px; color: var(--text-2);">${esc(order.project_name || '')}</div>
+          <div style="margin-top: 4px;">
+            ${order.priority === 'rush' ? `<span class="badge badge-rush">${esc(t('badgeRush'))}</span>` : ''}
+            ${isOverdue(order) ? `<span class="badge" style="background: var(--warn-soft); color: var(--warn-text);">${esc(t('badgeOverdue'))}</span>` : ''}
+            ${statusBadge(order)}
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div class="num title-tight" style="font-size: 28px; font-weight: 700; color: ${pct === 100 ? 'var(--success)' : 'var(--text-1)'};">${pct}%</div>
+          <div style="font-size: 12px; color: var(--text-2); margin-top: 2px;">${esc(t('overall'))}</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;">
+        <div class="stat-tile" style="background: var(--surface-2); box-shadow: none;">
+          <div class="num-big">${order.pieces.length}</div>
+          <div class="num-label">${esc(t('totalPieces'))}</div>
+        </div>
+        <div class="stat-tile" style="background: var(--surface-2); box-shadow: none;">
+          <div class="num-big" style="color:${rw > 0 ? 'var(--danger)' : 'var(--success)'};">${rw}</div>
+          <div class="num-label">${esc(t('reworkPieces'))}</div>
+        </div>
+        <div class="stat-tile" style="background: var(--surface-2); box-shadow: none;">
+          <div class="num-big">${bk}</div>
+          <div class="num-label">${esc(t('brokenPieces'))}</div>
+        </div>
+      </div>
+    </div>
+
+    ${order.archived_at ? `<div class="card" style="background: var(--surface-2); margin-bottom:12px;">
+      <div style="display:flex; align-items:center; gap: 10px;">
+        <span class="badge badge-done">${esc(t('statusArchived'))}</span>
+        <div style="flex:1;">
+          <div style="font-weight:700;">${esc(t('archivedAt'))}: ${esc(relativeTime(order.archived_at))}</div>
+          <div style="font-size: 13px; color:var(--text-2); margin-top:4px;">${esc(t('archivedOrderNote'))}</div>
+        </div>
+      </div>
+    </div>` : ''}
+
+    ${rw > 0 ? `<div class="card" style="background: var(--danger-soft); color: var(--danger-text); margin-bottom:12px;">
+      <div style="font-weight: 700;">${esc(tn('reworkBlockN', { n: rw }))}</div>
+      <div style="font-size: 13px; margin-top: 6px;">${esc(t('pieceIdsLabel'))}: #${reworkPieces.join(' #')}</div>
+    </div>` : ''}
+
+    ${holdPieces.length > 0 ? `<div class="card" style="background: var(--warn-soft); color: var(--warn-text); margin-bottom:12px;">
+      <div style="font-weight: 700;">${esc(t('holdBlockN'))}: #${holdPieces.join(' #')}</div>
+    </div>` : ''}
+
+    <div style="font-weight: 700; margin-bottom: 8px; padding: 0 4px;">${esc(t('workflowProgress'))}</div>
+    ${stageRow}
+
+    <a class="card tap" href="worker-pieces.html?id=${order.id}&stage=all" style="margin-top: 12px; display:flex; align-items:center; gap: 12px; text-decoration: none; color: inherit;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-2);" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+        <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+        <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+        <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+      </svg>
+      <div style="flex:1;">
+        <div style="font-weight: 600;">${esc(tn('viewAllPiecesN', { n: order.pieces.length }))}</div>
+        <div style="font-size: 12px; color:var(--text-2);">${esc(t('viewAllPiecesSub'))}</div>
+      </div>
+      <div style="color:var(--text-3); font-size: 20px;">›</div>
+    </a>
+
+    ${order.note ? `<div class="card" style="margin-top: 12px; font-size: 14px; color:var(--text-2);">${esc(order.note)}</div>` : ''}
+
+    ${renderTimeline(order.events)}
+    ${renderSlipLink(order)}
+  `;
+
+  renderActionBar(pct);
+  applyI18n();
+}
+
+function renderActionBar(pct) {
+  const ab = document.getElementById('actions');
+  let primary = '';
+  if (order.status === 'ready_pickup') {
+    primary = `<a class="btn btn-success" href="pickup-sign.html?id=${order.id}">${esc(t('pickupSign'))}</a>`;
+  } else if (order.status === 'picked_up') {
+    primary = `<button class="btn btn-success" onclick="sendSlip(event)">${esc(t('sendSlipBtn'))}</button>`;
+  } else if (pct === 100) {
+    primary = `<button class="btn btn-primary" onclick="markReady(event)">${esc(t('notifyReady'))}</button>`;
+  } else {
+    primary = `<a class="btn btn-warn" href="worker-pieces.html?id=${order.id}&stage=all">${esc(t('workshopView'))}</a>`;
+  }
+  const backHref = order.archived_at ? 'boss-dashboard.html?archived=1' : 'boss-dashboard.html';
+  ab.innerHTML = `<a class="btn btn-ghost back" href="${backHref}">${esc(t('back'))}</a>${primary}`;
+}
+
+function relativeTimeLocal(s) {
+  return relativeTime(s);
+}
+
+function renderTimeline(events) {
+  if (!events || !events.length) return '';
+  const slice = events.slice(0, 10);
+  const rows = slice.map((ev, i) => {
+    const label = eventLabel(ev.action);
+    const actor = ev.actor_name ? ` · ${esc(ev.actor_name)}` : '';
+    const isLast = i === slice.length - 1;
+    return `
+      <div style="display:flex; gap: 12px; padding: 10px 0; ${isLast ? '' : 'border-bottom: 1px solid var(--border-2);'}">
+        <div style="flex-shrink:0; padding-top: 5px;">
+          <span class="dot dot-doing" style="margin: 0;"></span>
+        </div>
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size: 14px; color: var(--text-1);">${esc(label)}<span style="color:var(--text-2); font-weight:500;">${actor}</span></div>
+          <div style="color: var(--text-3); font-size: 12px; margin-top: 2px;">${esc(relativeTime(ev.at))}</div>
+        </div>
+      </div>`;
+  }).join('');
+  return `
+    <div class="card" style="margin-top: 12px;">
+      <div style="font-weight:700; margin-bottom: 4px;">${esc(tn('timelineN', { n: slice.length }))}</div>
+      ${rows}
+    </div>`;
+}
+
+function renderSlipLink(order) {
+  if (order.status !== 'picked_up') return '';
+  const ev = (order.events || []).find(e => e.action === 'order_picked_up');
+  let slip = null;
+  if (ev && ev.details) {
+    try { slip = JSON.parse(ev.details).slip_pdf_path; } catch (err) {}
+  }
+  if (!slip) return '';
+  return `
+    <a class="card tap" href="${escAttr(slip)}" target="_blank" style="margin-top: 12px; display:flex; align-items:center; gap: 12px; text-decoration: none; color: inherit; background:var(--success-soft);">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success);" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      <div style="flex:1;">
+        <div style="font-weight: 600; color:var(--success-text);">${esc(t('downloadSlip'))}</div>
+        <div style="font-size: 12px; color:var(--success);">${esc(t('downloadSlipSub'))}</div>
+      </div>
+      <div style="color:var(--success); font-size: 20px;">›</div>
+    </a>`;
+}
+
+function openOrderMenu(event) {
+  if (!order) {
+    toast(t('requestFailed'), { type: 'danger' });
+    return;
+  }
+  const items = [
+    { label: t('menuEditOrder'), onClick: openEdit },
+  ];
+  if (order.status === 'picked_up') {
+    items.push({ label: t('menuSendSlip'), onClick: sendSlip });
+    if (!order.archived_at) {
+      items.push({ label: t('menuArchiveOrder'), onClick: archiveOrder });
+      items.push({ divider: true });
+      items.push({ label: t('menuRevertPickup'), danger: true, onClick: revertPickup });
+    }
+  }
+  popMenu(event.currentTarget, items);
+}
+
+function pieceStepChecked(piece, step) {
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  return required.includes(step) ? 'checked' : '';
+}
+
+function openEdit() {
+  document.getElementById('editProject').value = order.project_name || '';
+  document.getElementById('editPriority').value = order.priority || 'normal';
+  document.getElementById('editDeadline').value = order.deadline || '';
+  document.getElementById('editNote').value = order.note || '';
+  document.getElementById('editPieces').innerHTML = order.pieces.map(p => `
+    <div class="card" style="background: var(--surface-2); margin-top:8px; padding:10px;" data-piece-edit="${p.id}">
+      <div style="font-weight:700;">#${p.piece_no} · ${esc(p.size || '')}</div>
+      <input class="form-input" style="margin-top:8px;" data-field="piece_note" value="${escAttr(p.piece_note || '')}" placeholder="${esc(t('note'))}">
+      <div class="checkbox-row">
+        <label><input type="checkbox" data-step="cut" ${pieceStepChecked(p, 'cut')}> ${esc(stageLabel('cut'))}</label>
+        <label><input type="checkbox" data-step="edge" ${pieceStepChecked(p, 'edge')}> ${esc(stageLabel('edge'))}</label>
+        <label><input type="checkbox" data-step="tempered" ${pieceStepChecked(p, 'tempered')}> ${esc(stageLabel('tempered'))}</label>
+      </div>
+    </div>`).join('');
+  document.getElementById('editModal').classList.add('open');
+  applyI18n();
+}
+
+function closeEdit() {
+  document.getElementById('editModal').classList.remove('open');
+}
+
+async function saveEdit(ev) {
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const pieces = [...document.querySelectorAll('[data-piece-edit]')].map(row => ({
+      id: Number(row.dataset.pieceEdit),
+      piece_note: row.querySelector('[data-field="piece_note"]').value.trim(),
+      required_steps: [...row.querySelectorAll('[data-step]:checked')].map(input => input.dataset.step),
+    }));
+    try {
+      await api('/api/orders/' + order.id, {
+        method: 'PATCH',
+        body: {
+          project_name: document.getElementById('editProject').value.trim(),
+          priority: document.getElementById('editPriority').value,
+          deadline: document.getElementById('editDeadline').value,
+          note: document.getElementById('editNote').value.trim(),
+          pieces,
+        },
+      });
+      closeEdit();
+      await loadOrder();
+      toast(t('saved'), { type: 'success' });
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+}
+
+async function sendSlip(ev) {
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  try {
+    await withBusy(btn, async () => {
+      const data = await api('/api/orders/' + order.id + '/send-slip', { method: 'POST' });
+      const skipped = data.mail && data.mail.skipped;
+      toast(
+        skipped ? tn('slipSkipped', { reason: data.mail.reason || '' }) : t('slipSent'),
+        { type: skipped ? '' : 'success' },
+      );
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function revertPickup() {
+  const ok = await confirmModal({
+    title: t('revertPickupConfirm'),
+    body: t('revertPickupBody'),
+    confirmText: t('menuRevertPickup'),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api('/api/orders/' + order.id + '/revert-pickup', { method: 'POST' });
+    await loadOrder();
+    toast(t('pickupReverted'), { type: 'success' });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function archiveOrder() {
+  const ok = await confirmModal({
+    title: t('archiveOrderConfirm'),
+    body: t('archiveOrderBody'),
+    confirmText: t('menuArchiveOrder'),
+  });
+  if (!ok) return;
+  try {
+    const data = await api('/api/orders/' + order.id + '/archive', { method: 'POST' });
+    order = data.order;
+    render();
+    toast(t('orderArchived'), { type: 'success' });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function markReady(ev) {
+  const ok = await confirmModal({
+    title: t('notifyReadyConfirm'),
+    body: t('notifyReadyBody'),
+    confirmText: t('confirmNotify'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  try {
+    await withBusy(btn, async () => {
+      await api('/api/orders/' + order.id + '/ready', { method: 'POST' });
+      await loadOrder();
+      toast(t('markedReady'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+function onLangChange() { render(); }
+
+if (pageAllowed) {
+  loadOrder().catch(err => {
+    document.getElementById('body').innerHTML = errorState(err.message, t('retry'), () => loadOrder().catch(e => toast(e.message, { type: 'danger' })));
+  });
+}
+</script>
+</body>
+</html>

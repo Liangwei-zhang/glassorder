@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Piece Grid</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <a href="#" id="backBtn" class="back-btn">‹</a>
+  <div style="flex:1; min-width:0;">
+    <div style="font-size: 11px; color: var(--text-2);" id="sub"></div>
+    <div style="font-size: 17px; font-weight: 700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="title" data-i18n="pieceGrid">片子网格</div>
+  </div>
+  <button class="select-btn" id="selectToggle" type="button" onclick="toggleSelectMode()" data-i18n="selectMode">选择</button>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div style="background: var(--surface); padding: 8px 12px; overflow-x: auto; white-space: nowrap; position: sticky; top: 60px; z-index: 5; box-shadow: 0 0.5px 0 var(--border-1);">
+  <button class="stage-tab" data-stage="all"><span data-i18n="stageAll">全部</span></button>
+  <button class="stage-tab" data-stage="cut"><span data-i18n="stageCut">切</span></button>
+  <button class="stage-tab" data-stage="edge"><span data-i18n="stageEdge">开切口</span></button>
+  <button class="stage-tab" data-stage="tempered"><span data-i18n="stageTempered">钢化</span></button>
+  <button class="stage-tab" data-stage="finished"><span data-i18n="stageFinished">完成</span></button>
+</div>
+
+<div class="center-col" style="padding: 10px 16px 0;">
+  <div class="card" style="padding: 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 10px;" id="legend"></div>
+</div>
+
+<div class="center-col" style="padding: 10px 16px 0;">
+  <div id="summary" style="padding: 4px; font-size: 13px; color: var(--text-2);"></div>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 8px 16px 100px;">
+  <div id="grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;"></div>
+  <div id="empty" style="display:none; text-align:center; color:var(--text-3); padding: 60px 20px;">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 10px; opacity: .6;" aria-hidden="true">
+      <circle cx="12" cy="12" r="10"></circle>
+      <polyline points="9 12 11 14 15 10"></polyline>
+    </svg>
+    <div data-i18n="emptyStageMsg">本工序已无待处理片</div>
+  </div>
+</div>
+
+<div class="action-bar" id="actionBar"></div>
+
+<div class="modal-backdrop" id="pieceModal">
+  <div class="modal">
+    <div style="text-align:center; margin-bottom: 12px;">
+      <div style="font-size: 22px; font-weight: 800;" id="mTitle">#</div>
+      <div style="color: var(--text-2); margin-top: 2px; font-size: 13px;" id="mSub"></div>
+    </div>
+    <div id="mDrawing" style="margin-bottom: 12px; background: #fafafa; border-radius: 10px; overflow: hidden; cursor: zoom-in; position: relative;" onclick="openFullDrawing()"></div>
+    <div id="mStatus" style="padding: 12px; background: var(--surface-2); border-radius: 10px; margin-bottom: 12px; text-align:center; font-size: 14px;"></div>
+    <div id="mActions" style="display:flex; flex-direction: column; gap: 10px;"></div>
+    <div id="mAdvanced" style="margin-top: 14px; text-align:center; font-size:13px;"></div>
+    <button class="btn btn-ghost" style="width:100%; margin-top: 14px;" onclick="closeModal()" data-i18n="close">关闭</button>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="drawingModal" style="background: rgba(0,0,0,.95); align-items: center;">
+  <div style="width: 100%; height: 100dvh; max-height: 100vh; display:flex; flex-direction: column;">
+    <div style="padding: 12px 14px; padding-top: calc(max(env(safe-area-inset-top, 0px), 20px) + 8px); color: white; display:flex; align-items: center; gap: 12px; background: linear-gradient(to bottom, rgba(0,0,0,.65), rgba(0,0,0,0));">
+      <button onclick="closeModal()" aria-label="back"
+        style="background:rgba(255,255,255,.22); border:none; color:white; width:52px; height:52px; border-radius:14px; font-size:32px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; box-shadow: 0 2px 8px rgba(0,0,0,.4);">
+        ‹
+      </button>
+      <div style="flex:1; min-width:0;">
+        <div style="font-size: 16px; font-weight: 700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="fullTitle"></div>
+        <div style="font-size: 12px; opacity: .8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="fullSub"></div>
+      </div>
+      <div style="font-size: 12px; opacity: .75; min-width: 44px; text-align:right;" id="zoomLabel">100%</div>
+    </div>
+    <div id="viewer" style="flex:1; overflow: hidden; position: relative; touch-action: none; background: #222; cursor: grab;">
+      <img id="fullDrawing" style="position: absolute; left: 0; top: 0; transform-origin: 0 0; background: white; user-select: none; -webkit-user-drag: none; pointer-events: none;">
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="brokenModal">
+  <div class="modal">
+    <div style="text-align:center;">
+      <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; background:var(--danger-soft); border-radius:50%; margin-bottom: 8px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--danger);" aria-hidden="true">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+      <div class="title-tight" style="font-size: 20px; font-weight: 700; margin-top: 6px;" data-i18n="confirmBrokenTitle">确认上报碎片</div>
+      <div style="color: var(--text-2); margin-top: 6px; font-size: 14px;" id="brokenDesc"></div>
+    </div>
+    <div style="background: var(--danger-soft); color: var(--danger-text); padding: 12px; border-radius: 10px; margin: 16px 0; font-size: 14px;" data-i18n="brokenWarnLines">
+      这片玻璃会退回切玻璃工位补做，并写入订单事件。
+    </div>
+    <label class="form-label" data-i18n="note">备注（可选）</label>
+    <input class="form-input" id="brokenNote" data-i18n-placeholder="brokenNotePh" placeholder="如: 开切口时边角裂开">
+    <div style="display:flex; gap: 10px; margin-top: 14px;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="closeModal()" data-i18n="cancel">取消</button>
+      <button class="btn btn-danger" style="flex:1;" onclick="confirmBroken()" data-i18n="confirmReport">确认上报</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+ensureAuth();
+const params = new URLSearchParams(location.search);
+const orderId = params.get('id');
+const initialStage = params.get('stage') || 'all';
+let currentStage = initialStage;
+let order = null;
+let currentPiece = null;
+let selectMode = false;
+let selectedIds = new Set();
+let rangeAnchorId = null;
+let suppressNextCellAnimation = false;
+
+const referer = document.referrer || '';
+const _user = (typeof getUser === 'function' ? getUser() : null) || {};
+const _role = _user.role || '';
+const _fromParam = params.get('from') || '';
+let backTarget;
+if (_fromParam === 'worker' || _role === 'worker' || referer.includes('worker-queue')) {
+  backTarget = 'worker-queue.html';
+} else {
+  backTarget = 'boss-order-detail.html?id=' + orderId;
+}
+document.getElementById('backBtn').href = backTarget;
+
+async function loadOrder() {
+  const data = await api('/api/orders/' + orderId);
+  order = data.order;
+  headerRender();
+  setStageTab(currentStage);
+}
+
+function headerRender() {
+  document.getElementById('sub').textContent = `${t('workOrder')} #${order.order_number} · ${order.project_name || ''}`;
+  document.getElementById('title').textContent = order.company;
+}
+
+function patchPieces(updatedPieces) {
+  if (!order || !Array.isArray(updatedPieces)) return;
+  const byId = new Map(updatedPieces.map((p) => [Number(p.id), p]));
+  order.pieces = order.pieces.map((piece) => {
+    const next = byId.get(Number(piece.id));
+    return next ? { ...piece, ...next } : piece;
+  });
+  if (currentPiece && byId.has(Number(currentPiece.id))) {
+    currentPiece = { ...currentPiece, ...byId.get(Number(currentPiece.id)) };
+  }
+}
+
+function renderLegend() {
+  const items = [
+    { cls: 'pending', label: t('pcPending') },
+    { cls: 'done',    label: t('pcDone') },
+    { cls: 'rework',  label: t('pcRework') },
+    { cls: 'hold',    label: t('pcHold') },
+    { cls: 'broken',  label: t('pcBroken') },
+  ];
+  document.getElementById('legend').innerHTML = items.map(i =>
+    `<span style="display:inline-flex; align-items:center; gap:6px;"><span class="piece ${i.cls}" style="display:inline-block; width:14px; height:14px; padding:0; min-height:0; border-radius:3px; vertical-align:middle; aspect-ratio:auto; animation:none;"></span> ${esc(i.label)}</span>`
+  ).join('');
+}
+
+function setStageTab(stage) {
+  if (stage !== currentStage) rangeAnchorId = null;
+  currentStage = stage;
+  document.querySelectorAll('.stage-tab').forEach(b => {
+    if (b.dataset.stage === stage) b.classList.add('active');
+    else b.classList.remove('active');
+  });
+  render();
+}
+
+function piecesInView() {
+  if (!order) return [];
+  if (currentStage === 'all') return order.pieces;
+  return order.pieces.filter(p => p.stage === currentStage);
+}
+
+function shortSize(size) {
+  if (!size) return '';
+  const m = size.match(/([0-9][0-9/\\-]*)"?\s*[×x]\s*([0-9][0-9/\\-]*)/i);
+  if (!m) return esc(size.slice(0, 12));
+  return `${esc(m[1])}×${esc(m[2])}`;
+}
+
+function render() {
+  if (!order) {
+    document.getElementById('grid').innerHTML = '';
+    return;
+  }
+  renderLegend();
+  document.body.classList.toggle('select-mode', selectMode);
+  const pieces = piecesInView();
+  const grid = document.getElementById('grid');
+  const empty = document.getElementById('empty');
+  if (pieces.length === 0) {
+    grid.style.display = 'none';
+    empty.style.display = 'block';
+  } else {
+    grid.style.display = 'grid';
+    empty.style.display = 'none';
+    // Build via string-once → assign innerHTML (single layout). Avoid per-cell SVG; CSS handles checkmark.
+    let html = '';
+    for (let i = 0, n = pieces.length; i < n; i += 1) {
+      const p = pieces[i];
+      const sel = selectedIds.has(Number(p.id));
+      html += '<div class="' + pieceClass(p) + (sel ? ' selected' : '')
+        + (suppressNextCellAnimation ? ' no-anim' : '') + '" data-id="' + p.id + '">'
+        + '<span class="piece-check"></span>'
+        + '<div>' + p.piece_no + '</div>'
+        + '<div class="psize">' + shortSize(p.size) + '</div>'
+        + '</div>';
+    }
+    grid.innerHTML = html;
+  }
+  const total = order.pieces.length;
+  let done = 0, rework = 0, broken = 0;
+  for (const p of order.pieces) {
+    if (p.stage === 'finished') done += 1;
+    if (p.rework) rework += 1;
+    if (p.broken) broken += 1;
+  }
+  document.getElementById('summary').textContent = tn('pieceCountN', { total, done, rework, broken, view: pieces.length });
+  renderActionBar();
+  suppressNextCellAnimation = false;
+}
+
+function renderActionBar() {
+  const ab = document.getElementById('actionBar');
+  if (selectMode) {
+    const n = selectedIds.size;
+    const dis = n === 0 ? 'disabled style="opacity:.5;"' : '';
+    ab.innerHTML = `
+      <button class="btn btn-ghost back" onclick="exitSelectMode()">${esc(t('cancel'))}</button>
+      <button class="btn btn-success" ${dis} onclick="batchAction('complete')">${esc(t('batchComplete'))} ${n ? '(' + n + ')' : ''}</button>
+      <button class="menu-trigger" ${n === 0 ? 'disabled style="opacity:.45;"' : ''} onclick="openBatchMenu(event)" aria-label="more">⋯</button>`;
+    document.getElementById('selectToggle').classList.add('on');
+    document.getElementById('selectToggle').textContent = t('exitSelect');
+  } else {
+    ab.innerHTML = `
+      <a class="btn btn-ghost back" href="${escAttr(backTarget)}">${esc(t('back'))}</a>
+      <button class="btn btn-primary" id="refreshBtn" onclick="refreshOrder(event)">${esc(t('refresh'))}</button>`;
+    document.getElementById('selectToggle').classList.remove('on');
+    document.getElementById('selectToggle').textContent = t('selectMode');
+  }
+}
+
+async function refreshOrder(event) {
+  const btn = event && event.currentTarget ? event.currentTarget : document.getElementById('refreshBtn');
+  await withBusy(btn, async () => {
+    try {
+      await loadOrder();
+      toast(t('updated'), { type: 'success' });
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+}
+
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  if (!selectMode) { selectedIds.clear(); rangeAnchorId = null; }
+  render();
+}
+
+function exitSelectMode() {
+  selectMode = false;
+  selectedIds.clear();
+  rangeAnchorId = null;
+  render();
+}
+
+function pieceClick(event, id) {
+  if (selectMode) {
+    toggleSelect(id);
+    return;
+  }
+  openPieceModal(id);
+}
+
+function toggleSelect(id) {
+  id = Number(id);
+  const had = selectedIds.has(id);
+  if (had) selectedIds.delete(id);
+  else selectedIds.add(id);
+  if (!had) rangeAnchorId = id;        // tap to add → becomes the new anchor
+  else if (rangeAnchorId === id) rangeAnchorId = null; // tap to remove anchor
+  // Fast path: only flip the affected cell + update batch bar count.
+  const cell = document.querySelector('[data-id="' + id + '"]');
+  if (cell) cell.classList.toggle('selected', !had);
+  renderActionBar();
+}
+
+function selectedArray() {
+  return [...selectedIds];
+}
+
+function openPieceModal(id) {
+  const p = order.pieces.find(x => x.id === id);
+  currentPiece = p;
+  document.getElementById('mTitle').textContent = `${tn('pieceN', { n: p.piece_no })} · ${p.thickness || ''} ${p.type || ''}`;
+  document.getElementById('mSub').textContent = `${p.size || ''}${p.weight ? ' · ' + p.weight : ''}${p.piece_note ? ' · ' + p.piece_note : ''}`;
+  const dEl = document.getElementById('mDrawing');
+  if (p.drawing_path) {
+    dEl.innerHTML = `<img src="${escAttr(p.drawing_path)}" style="width: 100%; display:block;" onerror="this.parentElement.innerHTML='<div style=\\'padding:40px;text-align:center;color: var(--danger);\\'>${esc(t('drawingFailed'))}</div>'">
+      <div style="position:absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.7); color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px;">${esc(t('clickEnlarge'))}</div>`;
+  } else {
+    dEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--text-3);">${esc(t('noDrawing'))}</div>`;
+  }
+
+  let statusHtml = '';
+  if (p.rework) statusHtml = `<b style="color: var(--danger);">${esc(tn('statusReworkLine', { stage: stageLabel(p.stage) }))}</b>`;
+  else if (p.hold) statusHtml = `<b style="color: var(--warn);">${esc(t('statusHoldLine'))}</b>`;
+  else if (p.stage === 'finished') statusHtml = `<b style="color: var(--success);">${esc(t('statusFinishedLine'))}</b>`;
+  else statusHtml = `<b>${esc(tn('statusCurrentLine', { stage: stageLabel(p.stage) }))}</b>`;
+  const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  const requiredText = required.map(s => stageLabel(s)).join(' → ');
+  document.getElementById('mStatus').innerHTML = `${statusHtml}<div style="margin-top:6px; color: var(--text-2); font-size:12px;">${esc(t('requiredSteps'))}: ${esc(requiredText)}</div>`;
+
+  const ab = document.getElementById('mActions');
+  const adv = document.getElementById('mAdvanced');
+  if (p.stage === 'finished') {
+    ab.innerHTML = `<div style="text-align:center; color: var(--text-2);">${esc(t('pieceFinishedAll'))}</div>`;
+    adv.innerHTML = '';
+  } else if (p.hold) {
+    ab.innerHTML = `<button class="btn btn-ghost tap-lg" onclick="toggleHold(event)">${esc(t('unholdBtn'))}</button>
+      <button class="btn btn-danger tap-lg" onclick="askBroken()">${esc(t('brokenBtn'))}</button>`;
+    adv.innerHTML = '';
+  } else {
+    const nextLabel = p.next_step
+      ? tn('completeStep', { step: stageLabel(p.next_step) })
+      : t('completeAll');
+    ab.innerHTML = `<button class="btn btn-success tap-lg" onclick="completeStage()">${esc(nextLabel)}</button>
+      <button class="btn btn-danger tap-lg" onclick="askBroken()">${esc(t('brokenBtn'))}</button>
+      <button class="btn btn-warn" onclick="toggleHold(event)">${esc(t('holdBtn'))}</button>`;
+    const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+    const isCustom = required.length !== 3
+      || !required.includes('cut') || !required.includes('edge') || !required.includes('tempered');
+    const advLinks = [];
+    const isMirror = required.length === 1 && required[0] === 'cut';
+    if (required.includes('tempered')) {
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge'])">${esc(t('skipTempered'))}</button>`);
+    }
+    if (required.includes('edge')) {
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered'])">${esc(t('skipOpening'))}</button>`);
+    }
+    if (!isMirror) {
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut'])">${esc(t('mirrorOnly'))}</button>`);
+    }
+    if (isCustom) {
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','tempered'])">${esc(t('restoreSteps'))}</button>`);
+    }
+    adv.innerHTML = advLinks.join(' · ');
+  }
+  document.getElementById('pieceModal').classList.add('open');
+}
+
+async function completeStage() {
+  const btn = document.querySelector('#mActions .btn-success');
+  try {
+    await withBusy(btn, async () => {
+      const data = await api('/api/pieces/' + currentPiece.id + '/advance', { method: 'POST' });
+      patchPieces([data.piece]);
+      suppressNextCellAnimation = true;
+      closeModal();
+      render();
+      toast(
+        data.piece.stage === 'finished'
+          ? tn('pieceAllDone', { n: data.piece.piece_no })
+          : tn('pieceAdvanced', { n: data.piece.piece_no, stage: stageLabel(data.piece.stage) }),
+        { type: 'success' },
+      );
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function setPieceConfig(requiredSteps) {
+  try {
+    const data = await api('/api/pieces/' + currentPiece.id + '/process-config', {
+      method: 'PATCH',
+      body: { required_steps: requiredSteps },
+    });
+    patchPieces([data.piece]);
+    suppressNextCellAnimation = true;
+    closeModal();
+    render();
+    toast(t('stepsUpdated'), { type: 'success' });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+function openBatchMenu(event) {
+  const items = [
+    { label: t('batchHold'), onClick: () => batchAction('hold') },
+    { label: t('batchUnhold'), onClick: () => batchAction('unhold') },
+    { divider: true },
+    { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered']) },
+    { label: t('noTempered'), onClick: () => batchConfig(['cut','edge']) },
+    { label: t('batchMirror'), onClick: () => batchConfig(['cut']) },
+    { label: t('restoreAllSteps'), onClick: () => batchConfig(['cut','edge','tempered']) },
+    { divider: true },
+    { label: t('batchBroken'), danger: true, onClick: () => batchAction('broken') },
+  ];
+  popMenu(event.currentTarget, items);
+}
+
+async function batchAction(action) {
+  const ids = selectedArray();
+  if (!ids.length) return toast(t('selectFirst'), { type: 'danger' });
+  const ok = await confirmModal({
+    title: tn('confirmNPieces', { n: ids.length }),
+    body: action === 'broken' ? t('brokenWarn') : '',
+    confirmText: t('confirm'),
+    danger: action === 'broken',
+  });
+  if (!ok) return;
+  const btn = document.querySelector('#actionBar .btn-success');
+  try {
+    await withBusy(btn, async () => {
+      const data = await api('/api/pieces/batch', { method: 'POST', body: { action, piece_ids: ids } });
+      patchPieces(data.pieces || []);
+      suppressNextCellAnimation = true;
+      exitSelectMode();
+      toast(t('batchOk'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function batchConfig(requiredSteps) {
+  const ids = selectedArray();
+  if (!ids.length) return toast(t('selectFirst'), { type: 'danger' });
+  try {
+    const data = await api('/api/pieces/batch', {
+      method: 'POST',
+      body: { action: 'set_process_config', piece_ids: ids, required_steps: requiredSteps },
+    });
+    patchPieces(data.pieces || []);
+    suppressNextCellAnimation = true;
+    exitSelectMode();
+    toast(t('batchStepsUpdated'), { type: 'success' });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+function openFullDrawing() {
+  if (!currentPiece || !currentPiece.drawing_path) return;
+  document.getElementById('fullTitle').textContent = `${tn('pieceN', { n: currentPiece.piece_no })} · ${currentPiece.thickness || ''} ${currentPiece.type || ''}`;
+  document.getElementById('fullSub').textContent = `${currentPiece.size || ''}${currentPiece.weight ? ' · ' + currentPiece.weight : ''}`;
+  const img = document.getElementById('fullDrawing');
+  img.src = currentPiece.drawing_path;
+  img.onload = () => fitImageToViewer();
+  document.getElementById('pieceModal').classList.remove('open');
+  document.getElementById('drawingModal').classList.add('open');
+}
+
+let zoomState = { scale: 1, tx: 0, ty: 0, minScale: 0.1, maxScale: 8, fitScale: 1 };
+function applyTransform() {
+  const img = document.getElementById('fullDrawing');
+  img.style.transform = `translate(${zoomState.tx}px, ${zoomState.ty}px) scale(${zoomState.scale})`;
+  document.getElementById('zoomLabel').textContent = Math.round(zoomState.scale * 100 / zoomState.fitScale) + '%';
+}
+function fitImageToViewer() {
+  const img = document.getElementById('fullDrawing');
+  const viewer = document.getElementById('viewer');
+  if (!img.naturalWidth || !viewer) return;
+  const scale = Math.min(viewer.clientWidth / img.naturalWidth, viewer.clientHeight / img.naturalHeight);
+  zoomState.fitScale = scale;
+  zoomState.scale = scale;
+  zoomState.minScale = scale * 0.5;
+  zoomState.maxScale = scale * 10;
+  zoomState.tx = (viewer.clientWidth - img.naturalWidth * scale) / 2;
+  zoomState.ty = (viewer.clientHeight - img.naturalHeight * scale) / 2;
+  applyTransform();
+}
+function zoomBy(factor, cx, cy) {
+  const viewer = document.getElementById('viewer');
+  if (cx === undefined) { cx = viewer.clientWidth / 2; cy = viewer.clientHeight / 2; }
+  const newScale = Math.max(zoomState.minScale, Math.min(zoomState.maxScale, zoomState.scale * factor));
+  const actualFactor = newScale / zoomState.scale;
+  zoomState.tx = cx - (cx - zoomState.tx) * actualFactor;
+  zoomState.ty = cy - (cy - zoomState.ty) * actualFactor;
+  zoomState.scale = newScale;
+  applyTransform();
+}
+function zoomReset() { fitImageToViewer(); }
+
+(function initViewerGestures() {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || viewer.dataset.gesturesReady === '1') return;
+  viewer.dataset.gesturesReady = '1';
+
+  const pointers = new Map();
+  let pinchStart = null;
+  let panLast = null;
+  let lastTapAt = 0;
+
+  function rel(e) {
+    const r = viewer.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function pinchDist() {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+  function pinchCenter() {
+    const [a, b] = [...pointers.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  viewer.addEventListener('pointerdown', (e) => {
+    viewer.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, rel(e));
+    if (pointers.size === 1) {
+      const now = Date.now();
+      if (now - lastTapAt < 300 && e.pointerType !== 'mouse') {
+        zoomReset();
+        lastTapAt = 0;
+      } else {
+        lastTapAt = now;
+      }
+      panLast = rel(e);
+      viewer.style.cursor = 'grabbing';
+    } else if (pointers.size === 2) {
+      pinchStart = { dist: pinchDist(), scale: zoomState.scale, center: pinchCenter() };
+      panLast = null;
+    }
+  });
+
+  viewer.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, rel(e));
+    if (pointers.size === 2 && pinchStart) {
+      const d = pinchDist();
+      if (d > 0 && pinchStart.dist > 0) {
+        const targetScale = Math.max(zoomState.minScale, Math.min(zoomState.maxScale,
+          pinchStart.scale * (d / pinchStart.dist)));
+        const factor = targetScale / zoomState.scale;
+        const c = pinchStart.center;
+        zoomState.tx = c.x - (c.x - zoomState.tx) * factor;
+        zoomState.ty = c.y - (c.y - zoomState.ty) * factor;
+        zoomState.scale = targetScale;
+        applyTransform();
+      }
+    } else if (pointers.size === 1 && panLast) {
+      const p = rel(e);
+      zoomState.tx += p.x - panLast.x;
+      zoomState.ty += p.y - panLast.y;
+      panLast = p;
+      applyTransform();
+    }
+  });
+
+  function endPointer(e) {
+    if (pointers.has(e.pointerId)) pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchStart = null;
+    if (pointers.size === 0) {
+      panLast = null;
+      viewer.style.cursor = 'grab';
+    } else if (pointers.size === 1) {
+      panLast = [...pointers.values()][0];
+    }
+  }
+  viewer.addEventListener('pointerup', endPointer);
+  viewer.addEventListener('pointercancel', endPointer);
+  viewer.addEventListener('pointerleave', endPointer);
+
+  viewer.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const p = rel(e);
+    zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, p.x, p.y);
+  }, { passive: false });
+
+  viewer.addEventListener('dblclick', (e) => {
+    const p = rel(e);
+    const atFit = Math.abs(zoomState.scale - zoomState.fitScale) < 0.001;
+    if (atFit) zoomBy(2, p.x, p.y);
+    else zoomReset();
+  });
+})();
+
+function closeModal() {
+  document.getElementById('pieceModal').classList.remove('open');
+  document.getElementById('brokenModal').classList.remove('open');
+  document.getElementById('drawingModal').classList.remove('open');
+}
+
+function askBroken() {
+  closeModal();
+  document.getElementById('brokenDesc').textContent = `#${order.order_number} ${tn('pieceN', { n: currentPiece.piece_no })}`;
+  document.getElementById('brokenNote').value = '';
+  document.getElementById('brokenModal').classList.add('open');
+}
+
+async function confirmBroken() {
+  const note = document.getElementById('brokenNote').value.trim();
+  const btn = document.querySelector('#brokenModal .btn-danger');
+  try {
+    await withBusy(btn, async () => {
+      const data = await api('/api/pieces/' + currentPiece.id + '/broken', { method: 'POST', body: { note } });
+      patchPieces([data.piece]);
+      suppressNextCellAnimation = true;
+      closeModal();
+      currentStage = 'cut';
+      setStageTab('cut');
+      toast(tn('pieceBackToCut', { n: currentPiece.piece_no }), { type: 'danger' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function toggleHold(ev) {
+  const action = currentPiece.hold ? 'unhold' : 'hold';
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pieces/' + currentPiece.id + '/' + action, { method: 'POST' });
+    patchPieces([data.piece]);
+    suppressNextCellAnimation = true;
+    closeModal();
+    render();
+  }).catch(err => toast(err.message, { type: 'danger' }));
+}
+
+function onLangChange() {
+  if (order) { headerRender(); render(); }
+}
+
+document.querySelectorAll('.stage-tab').forEach(b => b.addEventListener('click', () => setStageTab(b.dataset.stage)));
+document.querySelectorAll('.modal-backdrop').forEach(m => m.addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); }));
+
+// Long-press to enter select mode + grid event delegation.
+(function bindGridGestures() {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  let pressTimer = null;
+  let pressStart = null;
+  let longPressed = false;
+  let pressedId = null;
+  const HOLD_MS = 450;
+  const MOVE_TOLERANCE = 10; // px
+
+  function findCell(target) {
+    return target && target.closest ? target.closest('[data-id]') : null;
+  }
+  function clearTimer() {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+  }
+  function onDown(e) {
+    const cell = findCell(e.target);
+    if (!cell) return;
+    pressedId = Number(cell.dataset.id);
+    longPressed = false;
+    const p = ('touches' in e && e.touches[0]) ? e.touches[0] : e;
+    pressStart = { x: p.clientX, y: p.clientY };
+    clearTimer();
+    cell.classList.add('long-pressing');
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      cell.classList.remove('long-pressing');
+      longPressed = true;
+      const enteringSelect = !selectMode;
+      if (enteringSelect) {
+        selectMode = true;
+      }
+      // Haptic feedback once per long-press (entry or range pick).
+      if (navigator && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(15); } catch (_) {}
+      }
+      if (enteringSelect || !rangeAnchorId) {
+        // First long-press: anchor + select this piece.
+        rangeAnchorId = pressedId;
+        selectedIds.add(pressedId);
+      } else if (rangeAnchorId === pressedId) {
+        // Long-press the anchor itself: just toggle it (deselect if already in set).
+        if (selectedIds.has(pressedId)) selectedIds.delete(pressedId);
+        else selectedIds.add(pressedId);
+        if (!selectedIds.has(pressedId)) rangeAnchorId = null;
+      } else {
+        // Second long-press: range-select between anchor and this piece (inclusive).
+        const view = piecesInView();
+        const aIdx = view.findIndex((p) => Number(p.id) === rangeAnchorId);
+        const bIdx = view.findIndex((p) => Number(p.id) === pressedId);
+        if (aIdx >= 0 && bIdx >= 0) {
+          const lo = Math.min(aIdx, bIdx);
+          const hi = Math.max(aIdx, bIdx);
+          for (let k = lo; k <= hi; k += 1) selectedIds.add(Number(view[k].id));
+          // Move anchor to the latest endpoint so a third press extends from there.
+          rangeAnchorId = pressedId;
+        } else {
+          selectedIds.add(pressedId);
+          rangeAnchorId = pressedId;
+        }
+      }
+      render();
+    }, HOLD_MS);
+  }
+  function onMove(e) {
+    if (!pressStart) return;
+    const p = ('touches' in e && e.touches[0]) ? e.touches[0] : e;
+    if (Math.abs(p.clientX - pressStart.x) > MOVE_TOLERANCE
+      || Math.abs(p.clientY - pressStart.y) > MOVE_TOLERANCE) {
+      clearTimer();
+      pressStart = null;
+      // Cancel the visual ring on any cell currently showing it.
+      document.querySelectorAll('.piece.long-pressing').forEach((c) => c.classList.remove('long-pressing'));
+    }
+  }
+  function onUp(e) {
+    clearTimer();
+    pressStart = null;
+    document.querySelectorAll('.piece.long-pressing').forEach((c) => c.classList.remove('long-pressing'));
+    // Long-press was handled in the timer; suppress the trailing click.
+    if (longPressed) {
+      e.preventDefault();
+      e.stopPropagation();
+      // Reset on next tick so the suppression flag survives until the click fires.
+      setTimeout(() => { longPressed = false; pressedId = null; }, 0);
+      return;
+    }
+    pressedId = null;
+  }
+  function onCancel() {
+    clearTimer();
+    pressStart = null;
+    longPressed = false;
+    pressedId = null;
+    document.querySelectorAll('.piece.long-pressing').forEach((c) => c.classList.remove('long-pressing'));
+  }
+  function onClick(e) {
+    if (longPressed) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    const cell = findCell(e.target);
+    if (!cell) return;
+    const id = Number(cell.dataset.id);
+    pieceClick(e, id);
+  }
+
+  // Use pointer events when available; fall back to touch + mouse.
+  if (window.PointerEvent) {
+    grid.addEventListener('pointerdown', onDown);
+    grid.addEventListener('pointermove', onMove);
+    grid.addEventListener('pointerup', onUp);
+    grid.addEventListener('pointercancel', onCancel);
+    grid.addEventListener('pointerleave', onCancel);
+  } else {
+    grid.addEventListener('touchstart', onDown, { passive: true });
+    grid.addEventListener('touchmove', onMove, { passive: true });
+    grid.addEventListener('touchend', onUp);
+    grid.addEventListener('touchcancel', onCancel);
+    grid.addEventListener('mousedown', onDown);
+    grid.addEventListener('mousemove', onMove);
+    grid.addEventListener('mouseup', onUp);
+    grid.addEventListener('mouseleave', onCancel);
+  }
+  // Click is the canonical activation event — let the browser dispatch it once,
+  // then route to pieceClick (or suppress if a long-press just fired).
+  grid.addEventListener('click', onClick);
+  // Suppress default context menu on long-press.
+  grid.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+})();
+
+function loadOrderOrError() {
+  loadOrder().catch(err => {
+    document.getElementById('empty').style.display = 'none';
+    document.getElementById('grid').style.display = 'block';
+    document.getElementById('grid').innerHTML = errorState(err.message, t('retry'), loadOrderOrError);
+    toast(err.message, { type: 'danger' });
+  });
+}
+loadOrderOrError();
+</script>
+</body>
+</html>

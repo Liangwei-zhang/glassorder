@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>新建订单</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="topbar">
+  <a href="boss-dashboard.html" class="back-btn">‹</a>
+  <div class="topbar-title">新建订单</div>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+
+  <div class="card" style="margin-bottom: 12px;">
+    <label class="form-label">客户公司</label>
+    <input class="form-input" id="company" placeholder="如: Inspire Homes" list="companyList">
+    <datalist id="companyList">
+      <option value="Inspire Homes"></option>
+      <option value="Coastline Glass Co."></option>
+      <option value="Northgate Developments"></option>
+    </datalist>
+    <div style="font-size:12px; color:#6b7280; margin-top:4px;">输入时自动匹配老客户</div>
+
+    <label class="form-label" style="margin-top: 14px;">项目 / 地址</label>
+    <input class="form-input" id="project" placeholder="如: 8 Heritage Cove">
+
+    <div style="display:flex; gap: 10px; margin-top: 14px;">
+      <div style="flex:1;">
+        <label class="form-label">联系电话</label>
+        <input class="form-input" id="phone" placeholder="可选">
+      </div>
+      <div style="flex:1;">
+        <label class="form-label">计划完工</label>
+        <input class="form-input" id="deadline" type="date" value="2026-05-18">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 12px;">
+    <label class="form-label">玻璃规格（适用所有片）</label>
+    <div style="display:flex; gap: 10px;">
+      <select class="form-select" id="gtype" style="flex:1;">
+        <option>Clear</option>
+        <option>Rain</option>
+        <option>Pinhead</option>
+        <option>Grey</option>
+        <option>Frosted</option>
+      </select>
+      <select class="form-select" id="thick" style="flex:1;">
+        <option>4mm</option>
+        <option>5mm</option>
+        <option selected>6mm</option>
+        <option>10mm</option>
+        <option>12mm</option>
+      </select>
+    </div>
+    <div style="font-size:12px; color:#6b7280; margin-top:4px;">如需混合规格，可在订单创建后对单片修改</div>
+
+    <label class="form-label" style="margin-top: 14px;">总片数</label>
+    <input class="form-input" id="pieces" type="number" min="1" value="24">
+    <div style="font-size:12px; color:#6b7280; margin-top:4px;">系统会自动编号 #1 ~ #N，工人按编号定位每一片</div>
+  </div>
+
+  <div class="card" style="margin-bottom: 12px;">
+    <label class="form-label">图纸 PDF（可选）</label>
+    <label class="btn btn-ghost" style="width: 100%; padding: 22px; border: 2px dashed #d1d5db; flex-direction: column; gap: 6px;">
+      <div style="font-size: 32px;">📄</div>
+      <div>点击选择 PDF / 图片</div>
+      <div style="font-size:12px; color:#6b7280; font-weight: 400;">系统自动按页拆分为每片玻璃图</div>
+      <input type="file" multiple style="display:none;" accept=".pdf,image/*">
+    </label>
+    <div style="margin-top: 8px; padding: 10px; background: #eff6ff; border-radius: 8px; font-size: 12px; color: #1e40af;">
+      💡 上传 PDF 后，系统将按页自动识别片数（如 9 页 = 1 页封面 + 8 片）。工人点任一编号即可看到该片的图纸和尺寸。
+    </div>
+
+    <label class="form-label" style="margin-top: 14px;">优先级</label>
+    <div style="display:flex; gap: 8px;">
+      <label class="btn btn-ghost" style="flex:1;"><input type="radio" name="prio" value="normal" checked style="margin-right:6px;"> 正常</label>
+      <label class="btn btn-ghost" style="flex:1; background:#fecaca; border-color:#fca5a5;"><input type="radio" name="prio" value="rush" style="margin-right:6px;"> 🔥 加急</label>
+    </div>
+
+    <label class="form-label" style="margin-top: 14px;">备注（可选）</label>
+    <textarea class="form-textarea" id="note" rows="3" placeholder="特殊要求、HOLD 片编号、客户嘱托等"></textarea>
+  </div>
+</div>
+
+<div class="action-bar">
+  <a href="boss-dashboard.html" class="btn btn-ghost">取消</a>
+  <button class="btn btn-primary" onclick="create()">发布到车间</button>
+</div>
+
+<script src="data.js"></script>
+<script>
+function create() {
+  const company = document.getElementById('company').value.trim();
+  const project = document.getElementById('project').value.trim();
+  const pieces  = parseInt(document.getElementById('pieces').value, 10) || 1;
+  if (!company || !project) { alert('请输入公司和项目'); return; }
+
+  const state = loadState();
+  const newId = '26' + String(Math.floor(Math.random() * 90000) + 10000);
+  const prio = document.querySelector('input[name=prio]:checked').value;
+  const order = {
+    id: newId,
+    company,
+    project,
+    createdAt: '2026-05-11 ' + new Date().toTimeString().slice(0,5),
+    deadline: document.getElementById('deadline').value,
+    priority: prio,
+    status: 'in_production',
+    totalPieces: pieces,
+    note: document.getElementById('note').value,
+    pieces: makePieces(pieces),
+  };
+  state.orders.unshift(order);
+  saveState(state);
+  alert(`订单 #${newId} 已发布，工人已看到新任务`);
+  location.href = 'boss-order-detail.html?id=' + newId;
+}
+</script>
+</body>
+</html>

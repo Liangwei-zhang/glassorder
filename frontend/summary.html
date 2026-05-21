@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Summary</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-title" data-i18n="navSummary">汇总</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col boss-shell" style="padding:16px;">
+  <div id="body"></div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = requireRolePage('boss');
+if (pageAllowed) injectBossNav('summary');
+let summary = null;
+
+async function loadSummary() {
+  document.getElementById('body').innerHTML = skeletonRows(5);
+  summary = await api('/api/summary/overview');
+  render();
+}
+
+function stat(v) { return Number(v || 0); }
+function metric(label, value) {
+  return `<div class="stat-tile"><div class="num-big">${stat(value)}</div><div class="num-label">${esc(label)}</div></div>`;
+}
+
+function render() {
+  if (!summary) return;
+  const tts = summary.totals || {};
+  document.getElementById('body').innerHTML = `
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-bottom:12px;">
+      ${metric(t('ordersCount'), tts.orders)}
+      ${metric(t('totalPieces'), tts.pieces)}
+      ${metric(t('pickedPieces'), tts.picked_pieces)}
+      ${metric(t('finishedPieces'), tts.finished_pieces)}
+      ${metric(t('holdPieces'), tts.hold_pieces)}
+      ${metric(t('reworkPieces'), tts.rework_pieces)}
+    </div>
+    <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
+      <div style="padding:12px 14px; font-weight:700;" data-i18n="summaryByStatus">${esc(t('summaryByStatus'))}</div>
+      ${(summary.by_status || []).map(r => `
+        <div class="row">
+          <div style="flex:1;"><div class="row-title">${esc(statusLabel(r.status))}</div><div class="row-sub">${esc(tn('piecesShortN', { n: stat(r.pieces) }))}</div></div>
+          <div class="num" style="font-weight:800;">${stat(r.orders)}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div style="padding:12px 14px; font-weight:700;" data-i18n="summaryByCustomer">${esc(t('summaryByCustomer'))}</div>
+      ${(summary.by_customer || []).map(c => `
+        <a class="row" href="summary-customer.html?id=${c.customer_id}">
+          <div style="flex:1;">
+            <div class="row-title">${esc(c.company)}</div>
+            <div class="row-sub">${esc(tn('ordersPiecesN', { orders: stat(c.orders), pieces: stat(c.pieces) }))} · ${esc(t('pickedPieces'))} ${stat(c.picked_pieces)}</div>
+          </div>
+          <div style="color:var(--text-3); font-size:20px;">›</div>
+        </a>`).join('')}
+    </div>`;
+}
+
+function statusLabel(status) {
+  if (status === 'ready_pickup') return t('statusReadyPickup');
+  if (status === 'picked_up') return t('statusPickedUp');
+  return t('statusInProduction');
+}
+function onLangChange() { render(); }
+if (pageAllowed) {
+  loadSummary().catch(err => {
+    document.getElementById('body').innerHTML = errorState(err.message, t('retry'), loadSummary);
+  });
+}
+</script>
+</body>
+</html>

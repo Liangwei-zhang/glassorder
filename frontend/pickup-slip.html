@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Pickup Slip</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <a href="pickup-batches.html" class="back-btn">‹</a>
+  <div class="topbar-title" data-i18n="pickupSlipTitle">取货凭证</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+  <div class="card" style="text-align: center; margin-bottom: 12px; background: var(--success-soft);">
+    <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; background:var(--success); border-radius:50%; margin-bottom:8px;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>
+    </div>
+    <div class="title-tight" style="font-size: 22px; font-weight: 700; color: var(--success-text); margin-top: 2px;" data-i18n="pickupComplete">取货完成</div>
+    <div style="color: var(--success-text); margin-top: 4px; font-size: 13px; opacity: .8;" id="stamp"></div>
+  </div>
+
+  <div class="card" id="slip" style="margin-bottom: 12px;"></div>
+  <div id="downloadBox" style="display:flex; gap: 8px;"></div>
+</div>
+
+<div class="action-bar">
+  <a href="boss-dashboard.html" class="btn btn-ghost back" data-i18n="backHome">返回首页</a>
+  <a href="pickup-search.html" class="btn btn-primary" data-i18n="nextOne">继续下一单</a>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const allowed = requireRolePage('boss');
+const id = new URLSearchParams(location.search).get('id');
+let cachedOrder = null;
+let cachedDetails = null;
+let cachedTimeStr = null;
+
+async function loadSlip() {
+  const data = await api('/api/orders/' + id);
+  cachedOrder = data.order;
+  const pickup = cachedOrder.events.find(e => e.action === 'order_picked_up');
+  let details = {};
+  if (pickup && pickup.details) {
+    try { details = JSON.parse(pickup.details); } catch (err) {}
+  }
+  cachedDetails = details;
+  const ts = pickup ? new Date(pickup.at.replace(' ', 'T') + 'Z') : new Date();
+  cachedTimeStr = ts.toLocaleString();
+  render();
+}
+
+function render() {
+  if (!cachedOrder) return;
+  const order = cachedOrder;
+  const details = cachedDetails || {};
+  document.getElementById('stamp').textContent = cachedTimeStr;
+  document.getElementById('slip').innerHTML = `
+    <div style="text-align:center; border-bottom: 1.5px solid var(--text-1); padding-bottom: 10px; margin-bottom: 14px;">
+      <div style="font-weight: 800; font-size: 20px;">${esc(t('pickupSlipHeader'))}</div>
+      <div style="font-size: 12px; color: var(--text-2); margin-top: 2px;">${esc(t('pickupSlipSubtitle'))}</div>
+    </div>
+    <div style="display:grid; grid-template-columns: auto 1fr; gap: 8px 14px; font-size: 14px;">
+      <div style="color: var(--text-2);">${esc(t('orderNumber'))}</div><div style="font-weight: 700;">#${esc(order.order_number)}</div>
+      <div style="color: var(--text-2);">${esc(t('companyLabel'))}</div><div>${esc(order.company)}</div>
+      <div style="color: var(--text-2);">${esc(t('projectLabel'))}</div><div>${esc(order.project_name || '')}</div>
+      <div style="color: var(--text-2);">${esc(t('totalPieces'))}</div><div>${order.pieces.length}</div>
+      <div style="color: var(--text-2);">${esc(t('pickupBy'))}</div><div style="font-weight: 700;">${esc(details.signer_name || '')}</div>
+      <div style="color: var(--text-2);">${esc(t('pickupContactPhone'))}</div><div>${esc(details.signer_phone || '—')}</div>
+      <div style="color: var(--text-2);">${esc(t('pickedAt'))}</div><div>${esc(cachedTimeStr)}</div>
+    </div>
+    <div style="margin-top: 14px; text-align: center; font-size: 11px; color: var(--text-3);">
+      ${esc(t('pickupSlipFooter'))}
+    </div>`;
+  document.getElementById('downloadBox').innerHTML = details.slip_pdf_path
+    ? `<button class="btn btn-ghost" style="flex:1;" onclick="window.print()">${esc(t('printBtn'))}</button><a class="btn btn-primary" style="flex:1; text-decoration:none;" href="${escAttr(details.slip_pdf_path)}" target="_blank">${esc(t('downloadPdfBtn'))}</a>`
+    : `<button class="btn btn-ghost" style="flex:1;" onclick="window.print()">${esc(t('printBtn'))}</button>`;
+}
+
+function onLangChange() { render(); }
+
+if (allowed) {
+  loadSlip().catch(err => {
+    document.getElementById('slip').textContent = err.message;
+  });
+}
+</script>
+
+<style>
+@media print {
+  .topbar, .action-bar { display: none !important; }
+  body { background: white; }
+  .card { box-shadow: none; border: 1px solid var(--text-1); }
+}
+</style>
+</body>
+</html>

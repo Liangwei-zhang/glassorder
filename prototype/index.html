@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>玻璃订单 · 选择角色</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="center-col" style="padding: 40px 20px;">
+  <div style="text-align:center; margin-bottom: 36px;">
+    <div style="font-size: 56px;">🏭</div>
+    <div style="font-size: 24px; font-weight: 800; margin-top: 8px;">玻璃厂订单</div>
+    <div style="color: #6b7280; margin-top: 6px;">原型演示 · 请选择角色</div>
+  </div>
+
+  <a class="role-card tap-lg" href="boss-dashboard.html" style="margin-bottom: 14px;">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="font-size: 40px;">👔</div>
+      <div style="flex:1;">
+        <div style="font-size: 18px; font-weight: 700;">老板 / 前台</div>
+        <div style="color: #6b7280; font-size: 14px; margin-top: 2px;">新建订单、跟进进度、通知取货</div>
+      </div>
+      <div style="color:#9ca3af; font-size: 24px;">›</div>
+    </div>
+  </a>
+
+  <a class="role-card tap-lg" href="worker-queue.html" style="margin-bottom: 14px;">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="font-size: 40px;">🧑‍🔧</div>
+      <div style="flex:1;">
+        <div style="font-size: 18px; font-weight: 700;">工人</div>
+        <div style="color: #6b7280; font-size: 14px; margin-top: 2px;">看我的活、点击上报完成 / 碎了</div>
+      </div>
+      <div style="color:#9ca3af; font-size: 24px;">›</div>
+    </div>
+  </a>
+
+  <a class="role-card tap-lg" href="pickup-search.html">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="font-size: 40px;">📦</div>
+      <div style="flex:1;">
+        <div style="font-size: 18px; font-weight: 700;">客户取货</div>
+        <div style="color: #6b7280; font-size: 14px; margin-top: 2px;">搜索订单、电子签字确认</div>
+      </div>
+      <div style="color:#9ca3af; font-size: 24px;">›</div>
+    </div>
+  </a>
+
+  <div style="margin-top: 32px; text-align: center; color: #9ca3af; font-size: 12px;">
+    <a href="#" onclick="sessionStorage.clear(); location.reload(); return false;" style="color:#9ca3af;">重置演示数据</a>
+  </div>
+</div>
+</body>
+</html>

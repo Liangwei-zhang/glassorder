@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>老板面板</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a href="index.html" class="back-btn">‹</a>
+  <div class="topbar-title">订单总览</div>
+  <a href="boss-new-order.html" class="btn btn-primary" style="padding: 10px 16px; text-decoration: none;">+ 新建</a>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+
+  <!-- Alerts strip -->
+  <div id="alerts"></div>
+
+  <!-- Quick stats -->
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px;">
+    <div class="card" style="padding: 12px; text-align: center;">
+      <div id="stat-total" style="font-size: 22px; font-weight: 800;">-</div>
+      <div style="font-size: 11px; color: #6b7280;">订单总数</div>
+    </div>
+    <div class="card" style="padding: 12px; text-align: center;">
+      <div id="stat-prod" style="font-size: 22px; font-weight: 800; color: #d97706;">-</div>
+      <div style="font-size: 11px; color: #6b7280;">生产中</div>
+    </div>
+    <div class="card" style="padding: 12px; text-align: center;">
+      <div id="stat-pickup" style="font-size: 22px; font-weight: 800; color: #3730a3;">-</div>
+      <div style="font-size: 11px; color: #6b7280;">待取货</div>
+    </div>
+    <div class="card" style="padding: 12px; text-align: center;">
+      <div id="stat-rework" style="font-size: 22px; font-weight: 800; color: #dc2626;">-</div>
+      <div style="font-size: 11px; color: #6b7280;">待补片</div>
+    </div>
+  </div>
+
+  <!-- Filter tabs -->
+  <div style="display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px;">
+    <button class="btn btn-ghost filter-btn" data-filter="all" style="padding: 8px 14px; min-height: 0;">全部</button>
+    <button class="btn btn-ghost filter-btn" data-filter="rush" style="padding: 8px 14px; min-height: 0;">🔥 加急</button>
+    <button class="btn btn-ghost filter-btn" data-filter="overdue" style="padding: 8px 14px; min-height: 0;">⚠️ 逾期</button>
+    <button class="btn btn-ghost filter-btn" data-filter="in_production" style="padding: 8px 14px; min-height: 0;">生产中</button>
+    <button class="btn btn-ghost filter-btn" data-filter="ready_pickup" style="padding: 8px 14px; min-height: 0;">可取货</button>
+  </div>
+
+  <!-- Search -->
+  <input class="form-input" id="search" placeholder="🔍 搜索订单号 / 公司名" style="margin-bottom: 12px;">
+
+  <!-- Order list -->
+  <div id="list" class="card" style="padding: 0; overflow: hidden;"></div>
+
+</div>
+
+<script src="data.js"></script>
+<script>
+const state = loadState();
+let currentFilter = 'all';
+
+function renderStats() {
+  const total = state.orders.length;
+  const prod = state.orders.filter(o => o.status === 'in_production').length;
+  const pickup = state.orders.filter(o => o.status === 'ready_pickup').length;
+  const rework = state.orders.reduce((sum, o) => sum + reworkCount(o), 0);
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-prod').textContent = prod;
+  document.getElementById('stat-pickup').textContent = pickup;
+  document.getElementById('stat-rework').textContent = rework;
+}
+
+function renderAlerts() {
+  const box = document.getElementById('alerts');
+  const reworkSum = state.orders.reduce((sum, o) => sum + reworkCount(o), 0);
+  const overdueOrders = state.orders.filter(isOverdue);
+  let html = '';
+  if (reworkSum > 0) {
+    html += `<div class="card" style="background:#fee2e2; color:#991b1b; margin-bottom: 10px; display:flex; align-items:center; gap:10px;">
+      <div style="font-size: 24px;">⚠️</div>
+      <div style="flex:1;"><b>${reworkSum} 片需补切</b><div style="font-size:12px;">切玻璃工位已自动收到通知</div></div>
+    </div>`;
+  }
+  if (overdueOrders.length > 0) {
+    html += `<div class="card" style="background:#fef3c7; color:#92400e; margin-bottom: 10px; display:flex; align-items:center; gap:10px;">
+      <div style="font-size: 24px;">🕒</div>
+      <div style="flex:1;"><b>${overdueOrders.length} 单超过计划完工</b><div style="font-size:12px;">${overdueOrders.map(o => '#' + o.id).join(', ')}</div></div>
+    </div>`;
+  }
+  box.innerHTML = html;
+}
+
+function statusBadge(o) {
+  if (o.status === 'ready_pickup')  return '<span class="badge badge-pickup">可取货</span>';
+  if (o.status === 'picked_up')     return '<span class="badge badge-done">已取货</span>';
+  if (o.status === 'in_production') return '<span class="badge badge-prod">生产中</span>';
+  return '<span class="badge badge-new">新单</span>';
+}
+
+function renderList() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  let list = state.orders.slice();
+
+  if (currentFilter === 'rush')          list = list.filter(o => o.priority === 'rush');
+  else if (currentFilter === 'overdue')  list = list.filter(isOverdue);
+  else if (currentFilter !== 'all')      list = list.filter(o => o.status === currentFilter);
+
+  if (q) list = list.filter(o => o.id.includes(q) || o.company.toLowerCase().includes(q));
+
+  const el = document.getElementById('list');
+  if (list.length === 0) {
+    el.innerHTML = '<div style="padding: 40px; text-align: center; color: #9ca3af;">没有订单</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(o => {
+    const pct = orderProgress(o);
+    const rw = reworkCount(o);
+    const overdue = isOverdue(o);
+    const pctClass = o.priority === 'rush' ? 'rush' : (pct === 100 ? 'done' : '');
+    return `
+      <a class="row" href="boss-order-detail.html?id=${o.id}" style="flex-direction: column; align-items: stretch;">
+        <div style="display:flex; align-items:center; gap: 10px; width:100%;">
+          <div style="flex:1;">
+            <div class="row-title">
+              #${o.id} · ${o.company}
+              ${o.priority === 'rush' ? '<span class="badge badge-rush" style="margin-left:6px;">🔥 加急</span>' : ''}
+              ${rw > 0 ? `<span class="badge badge-rework" style="margin-left:6px;">🔴 ${rw} 片待补</span>` : ''}
+              ${overdue ? '<span class="badge" style="background:#fef3c7; color:#92400e; margin-left:6px;">⏰ 逾期</span>' : ''}
+            </div>
+            <div class="row-sub">${o.project} · ${o.totalPieces} 片 · 计划 ${o.deadline}</div>
+          </div>
+          ${statusBadge(o)}
+        </div>
+        <div style="display:flex; align-items:center; gap: 8px; margin-top: 10px; width:100%;">
+          <div class="progress" style="flex:1;">
+            <div class="progress-fill ${pctClass}" style="width:${pct}%;"></div>
+          </div>
+          <div style="font-size:12px; color:#6b7280; width: 36px; text-align: right;">${pct}%</div>
+        </div>
+      </a>`;
+  }).join('');
+}
+
+document.querySelectorAll('.filter-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    currentFilter = b.dataset.filter;
+    document.querySelectorAll('.filter-btn').forEach(x => {
+      x.style.background = 'white';
+      x.style.color = '#111827';
+    });
+    b.style.background = '#111827';
+    b.style.color = 'white';
+    renderList();
+  });
+});
+document.getElementById('search').addEventListener('input', renderList);
+
+renderStats();
+renderAlerts();
+renderList();
+</script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>电子签字</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="topbar">
+  <a href="pickup-search.html" class="back-btn">‹</a>
+  <div class="topbar-title">取货签字</div>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+
+  <div class="card" id="info" style="margin-bottom: 12px;"></div>
+
+  <div class="card" style="margin-bottom: 12px;">
+    <label class="form-label">取货人姓名</label>
+    <input class="form-input" id="name" placeholder="如: 张师傅">
+
+    <label class="form-label" style="margin-top: 14px;">联系电话</label>
+    <input class="form-input" id="phone" placeholder="可选">
+  </div>
+
+  <div class="card">
+    <div style="display:flex; justify-content: space-between; align-items: center;">
+      <label class="form-label" style="margin:0;">客户签名</label>
+      <button class="btn btn-ghost" style="padding: 6px 12px; min-height: 0;" onclick="clearSig()">清除</button>
+    </div>
+    <canvas id="sig" class="sig-pad" style="margin-top: 8px;"></canvas>
+    <div style="font-size: 12px; color:#6b7280; margin-top: 6px;">请在上方白色区域手写签名</div>
+  </div>
+
+</div>
+
+<div class="action-bar">
+  <a href="pickup-search.html" class="btn btn-ghost">取消</a>
+  <button class="btn btn-success" onclick="submit()">✅ 确认取货</button>
+</div>
+
+<script src="data.js"></script>
+<script>
+const id = new URLSearchParams(location.search).get('id');
+const state = loadState();
+const order = state.orders.find(o => o.id === id);
+
+if (!order) {
+  document.getElementById('info').textContent = '订单不存在';
+} else {
+  document.getElementById('info').innerHTML = `
+    <div style="display:flex; align-items: center; gap: 12px;">
+      <div style="font-size: 36px;">📦</div>
+      <div style="flex:1;">
+        <div style="font-size: 18px; font-weight: 800;">#${order.id}</div>
+        <div style="color:#6b7280; margin-top: 2px;">${order.company} · ${order.project}</div>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px;">
+      <div style="padding: 10px; background: #f9fafb; border-radius: 10px; text-align: center;">
+        <div style="font-size: 16px; font-weight: 700;">${order.totalPieces}</div>
+        <div style="font-size: 11px; color:#6b7280;">总片数</div>
+      </div>
+      <div style="padding: 10px; background: #f9fafb; border-radius: 10px; text-align: center;">
+        <div style="font-size: 16px; font-weight: 700;">${order.deadline}</div>
+        <div style="font-size: 11px; color:#6b7280;">计划完工</div>
+      </div>
+      <div style="padding: 10px; background: #f9fafb; border-radius: 10px; text-align: center;">
+        <div style="font-size: 16px; font-weight: 700;">2026-05-11</div>
+        <div style="font-size: 11px; color:#6b7280;">今日取货</div>
+      </div>
+    </div>`;
+}
+
+// Signature pad
+const canvas = document.getElementById('sig');
+const ctx = canvas.getContext('2d');
+function resizeCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.offsetWidth * ratio;
+  canvas.height = canvas.offsetHeight * ratio;
+  ctx.scale(ratio, ratio);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#111827';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+let drawing = false, last = null;
+function getPos(e) {
+  const r = canvas.getBoundingClientRect();
+  const t = e.touches ? e.touches[0] : e;
+  return { x: t.clientX - r.left, y: t.clientY - r.top };
+}
+function start(e) { drawing = true; last = getPos(e); e.preventDefault(); }
+function move(e)  {
+  if (!drawing) return;
+  const p = getPos(e);
+  ctx.beginPath();
+  ctx.moveTo(last.x, last.y);
+  ctx.lineTo(p.x, p.y);
+  ctx.stroke();
+  last = p;
+  e.preventDefault();
+}
+function end() { drawing = false; }
+canvas.addEventListener('mousedown', start);
+canvas.addEventListener('mousemove', move);
+canvas.addEventListener('mouseup', end);
+canvas.addEventListener('mouseleave', end);
+canvas.addEventListener('touchstart', start);
+canvas.addEventListener('touchmove', move);
+canvas.addEventListener('touchend', end);
+
+function clearSig() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function isEmpty() {
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) return false;
+  return true;
+}
+
+function submit() {
+  if (!order) return;
+  const name = document.getElementById('name').value.trim();
+  if (!name) { alert('请输入取货人姓名'); return; }
+  if (isEmpty()) { alert('请签名'); return; }
+
+  order.status = 'picked_up';
+  order.pickup = {
+    name,
+    phone: document.getElementById('phone').value,
+    at: new Date().toISOString(),
+    signature: canvas.toDataURL(),
+  };
+  saveState(state);
+  location.href = 'pickup-slip.html?id=' + id;
+}
+</script>
+</body>
+</html>

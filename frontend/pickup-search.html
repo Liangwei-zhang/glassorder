@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Pickup</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <a href="pickup-batches.html" class="back-btn">‹</a>
+  <div class="topbar-title" data-i18n="pickupTitle">客户取货</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col" style="padding:16px 16px 110px;">
+  <div class="card" style="margin-bottom:12px;">
+    <label class="form-label" data-i18n="selectCustomer">选择客户</label>
+    <div id="customerPicker"></div>
+  </div>
+  <div id="available"></div>
+  <div class="card" style="margin-top:12px;">
+    <label class="form-label" data-i18n="signerName">取货人姓名</label>
+    <input class="form-input" id="name" data-i18n-placeholder="signerNamePh" placeholder="如: 张师傅">
+    <label class="form-label" style="margin-top:12px;" data-i18n="contactPhone">联系电话</label>
+    <input class="form-input" id="phone" data-i18n-placeholder="signerPhonePh" placeholder="可选">
+    <label class="form-label" style="margin-top:12px;" data-i18n="customerSign">客户签名</label>
+    <canvas id="sig" class="sig-pad" style="margin-top:8px; height:180px;"></canvas>
+    <button class="btn btn-ghost" type="button" onclick="clearSig()" style="margin-top:8px; min-height:0; padding:8px 12px;" data-i18n="clearSig">清空</button>
+  </div>
+</div>
+
+<div class="action-bar">
+  <a class="btn btn-ghost back" href="pickup-batches.html" data-i18n="back">返回</a>
+  <button class="btn btn-success" id="submitBtn" onclick="submitBatch(event)" data-i18n="pickupConfirmBtn">确认取货</button>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const allowed = requireRolePage('boss');
+let customers = [];
+let grouped = [];
+let selected = new Set();
+let signatureEmpty = true;
+let customerPicker = null;
+
+async function loadCustomers() {
+  const data = await api('/api/customers');
+  customers = data.customers;
+  customerPicker.setCustomers(customers);
+  if (customers.length) customerPicker.select(customers[0].id);
+  else document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
+}
+
+async function loadAvailable() {
+  selected.clear();
+  const id = customerPicker ? customerPicker.getValue() : '';
+  if (!id) {
+    document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
+    return;
+  }
+  const data = await api('/api/pickups/available?customer_id=' + encodeURIComponent(id));
+  grouped = data.orders || [];
+  renderAvailable();
+}
+
+function renderAvailable() {
+  const el = document.getElementById('available');
+  if (!grouped.length) {
+    el.innerHTML = emptyState(t('pickupEmpty'));
+    return;
+  }
+  el.innerHTML = grouped.map(order => `
+    <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
+      <div style="padding:12px 14px; background:var(--surface-2);">
+        <div class="row-title">#${esc(order.order_number)}</div>
+        <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: order.pieces.length }))}</div>
+      </div>
+      ${order.pieces.map(p => `
+        <label class="row" style="cursor:pointer;">
+          <input type="checkbox" data-piece="${p.id}" onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
+          <div style="flex:1;">
+            <div class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}</div>
+            <div class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}</div>
+          </div>
+        </label>`).join('')}
+    </div>`).join('');
+}
+
+function togglePiece(id, on) {
+  if (on) selected.add(Number(id));
+  else selected.delete(Number(id));
+}
+
+const canvas = document.getElementById('sig');
+const ctx = canvas.getContext('2d');
+let drawing = false, last = null;
+function resizeCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  const w = canvas.offsetWidth, h = canvas.offsetHeight;
+  if (!w || !h) return;
+  canvas.width = w * ratio;
+  canvas.height = h * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#18181b';
+  ctx.lineCap = 'round';
+}
+function pos(e) {
+  const r = canvas.getBoundingClientRect();
+  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  return { x: t.clientX - r.left, y: t.clientY - r.top };
+}
+function start(e) {
+  drawing = true;
+  last = pos(e);
+  if (canvas.setPointerCapture && e.pointerId !== undefined) {
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+  e.preventDefault();
+}
+function move(e) {
+  if (!drawing) return;
+  const p = pos(e);
+  ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+  last = p; signatureEmpty = false; e.preventDefault();
+}
+function end(e) {
+  drawing = false;
+  last = null;
+  if (canvas.releasePointerCapture && e && e.pointerId !== undefined) {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+}
+function clearSig() { ctx.clearRect(0, 0, canvas.width, canvas.height); signatureEmpty = true; }
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+canvas.addEventListener('pointerdown', start);
+canvas.addEventListener('pointermove', move);
+canvas.addEventListener('pointerup', end);
+canvas.addEventListener('pointercancel', end);
+canvas.addEventListener('pointerleave', end);
+canvas.addEventListener('mousedown', start);
+canvas.addEventListener('mousemove', move);
+canvas.addEventListener('mouseup', end);
+canvas.addEventListener('mouseleave', end);
+canvas.addEventListener('touchstart', start, { passive:false });
+canvas.addEventListener('touchmove', move, { passive:false });
+canvas.addEventListener('touchend', end);
+canvas.addEventListener('touchcancel', end);
+
+async function submitBatch(ev) {
+  const name = document.getElementById('name').value.trim();
+  if (!selected.size) return toast(t('selectFirst'), { type:'danger' });
+  if (!name) return toast(t('sigEmptyName'), { type:'danger' });
+  if (signatureEmpty) return toast(t('sigEmptySign'), { type:'danger' });
+  const ok = await confirmModal({
+    title: tn('pickupConfirmTitle', { name }),
+    body: tn('pickupBatchConfirmBody', { n: selected.size }),
+    confirmText: t('pickupConfirmCta'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/batches', {
+      method: 'POST',
+      body: {
+        piece_ids: [...selected],
+        signer_name: name,
+        signer_phone: document.getElementById('phone').value.trim(),
+        signature_base64: canvas.toDataURL('image/png'),
+      },
+    });
+    location.href = 'pickup-batch-detail.html?id=' + data.batch.id;
+  });
+}
+
+function onLangChange() { renderAvailable(); }
+if (allowed) {
+  customerPicker = initCustomerPicker({
+    root: '#customerPicker',
+    customers: [],
+    placeholder: t('customerSearchPlaceholder'),
+    onSelect: () => loadAvailable().catch(e => toast(e.message, { type:'danger' })),
+  });
+  loadCustomers().catch(err => {
+    document.getElementById('available').innerHTML = errorState(err.message, t('retry'), () => loadCustomers());
+  });
+}
+</script>
+</body>
+</html>

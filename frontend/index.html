@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Glass Factory Orders</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="center-col" style="padding: 48px 20px;">
+  <div style="text-align:center; margin-bottom: 40px;">
+    <div style="display:inline-flex; align-items:center; justify-content:center; width:64px; height:64px; background:var(--surface); border-radius:18px; box-shadow:var(--shadow-md); margin-bottom:14px;">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--brand);" aria-hidden="true">
+        <path d="M2 20V8l6 4V8l6 4V8l6 4v8z"></path>
+        <path d="M2 20h20"></path>
+      </svg>
+    </div>
+    <div class="title-tight" style="font-size: 26px; font-weight: 700;" data-i18n="appTitle">玻璃厂订单</div>
+    <div style="color: var(--text-2); margin-top: 6px; font-size: 14px;" id="userLine" data-i18n="selectWorkstation">请选择工作台</div>
+    <div style="margin-top: 18px;"><button class="lang-btn" type="button" onclick="toggleLang()" style="background:var(--surface-2); color:var(--text-1); padding:7px 14px; border-radius:var(--r-sm); border:none; font-weight:600; font-size:13px; cursor:pointer;">EN</button></div>
+  </div>
+
+  <a class="role-card tap-lg" href="boss-dashboard.html" style="margin-bottom: 12px;">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:var(--info-soft); border-radius:12px; flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--info);" aria-hidden="true">
+          <path d="M3 3h18v4H3z"></path>
+          <path d="M5 7v14h14V7"></path>
+          <path d="M9 12h6"></path>
+        </svg>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size: 17px; font-weight: 600; letter-spacing:-0.01em;" data-i18n="indexBoss">老板 / 前台</div>
+        <div style="color: var(--text-2); font-size: 13px; margin-top: 2px;" data-i18n="indexBossSub">新建订单、跟进进度、通知取货</div>
+      </div>
+      <div style="color:var(--text-3); font-size: 22px;">›</div>
+    </div>
+  </a>
+
+  <a class="role-card tap-lg" href="worker-queue.html" style="margin-bottom: 12px;">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:var(--warn-soft); border-radius:12px; flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--warn);" aria-hidden="true">
+          <path d="M14.7 6.3a4 4 0 0 0-5.66 0l-7.04 7.04a1 1 0 0 0 0 1.41l4.24 4.24a1 1 0 0 0 1.41 0l7.04-7.04a4 4 0 0 0 0-5.66z"></path>
+          <path d="M18 8l4 4"></path>
+          <path d="M14 4l4 4"></path>
+        </svg>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size: 17px; font-weight: 600; letter-spacing:-0.01em;" data-i18n="indexWorker">工人</div>
+        <div style="color: var(--text-2); font-size: 13px; margin-top: 2px;" data-i18n="indexWorkerSub">看我的活、点击上报完成 / 碎了</div>
+      </div>
+      <div style="color:var(--text-3); font-size: 22px;">›</div>
+    </div>
+  </a>
+
+  <a class="role-card tap-lg" href="pickup-search.html">
+    <div style="display:flex; align-items:center; gap: 16px;">
+      <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:var(--success-soft); border-radius:12px; flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success);" aria-hidden="true">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+          <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size: 17px; font-weight: 600; letter-spacing:-0.01em;" data-i18n="indexPickup">客户取货</div>
+        <div style="color: var(--text-2); font-size: 13px; margin-top: 2px;" data-i18n="indexPickupSub">搜索订单、电子签字确认</div>
+      </div>
+      <div style="color:var(--text-3); font-size: 22px;">›</div>
+    </div>
+  </a>
+
+  <div style="margin-top: 36px; text-align: center; font-size: 13px;">
+    <a href="#" onclick="logout(); return false;" style="color:var(--text-3); text-decoration: none;" data-i18n="logoutLink">退出登录</a>
+  </div>
+</div>
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+let onLangChange = null;
+if (ensureAuth()) {
+  const user = getUser();
+  if (user && user.role === 'worker') {
+    location.replace('worker-queue.html');
+  } else {
+    location.replace('boss-dashboard.html');
+  }
+}
+</script>
+</body>
+</html>

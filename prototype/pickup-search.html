@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>客户取货</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="topbar">
+  <a href="index.html" class="back-btn">‹</a>
+  <div class="topbar-title">客户取货</div>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+  <div class="card" style="margin-bottom: 12px;">
+    <label class="form-label">订单号 / 公司名 / 电话</label>
+    <input class="form-input" id="q" placeholder="输入后自动搜索">
+  </div>
+
+  <div style="font-size: 13px; color: #6b7280; margin: 4px 4px 8px;">可取货订单</div>
+  <div id="list"></div>
+</div>
+
+<script src="data.js"></script>
+<script>
+const state = loadState();
+
+function render() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const list = state.orders.filter(o => {
+    if (o.status !== 'ready_pickup') return false;
+    if (!q) return true;
+    return o.id.includes(q) || o.company.toLowerCase().includes(q);
+  });
+
+  const el = document.getElementById('list');
+  if (list.length === 0) {
+    el.innerHTML = '<div class="card" style="text-align:center; color:#9ca3af; padding:40px;">无匹配订单</div>';
+    return;
+  }
+  el.innerHTML = '<div class="card" style="padding:0; overflow: hidden;">' +
+    list.map(o => `
+      <a class="row" href="pickup-sign.html?id=${o.id}">
+        <div style="flex:1;">
+          <div class="row-title">#${o.id} · ${o.company}</div>
+          <div class="row-sub">${o.project} · ${o.totalPieces} 片 · 完工 ${o.deadline}</div>
+        </div>
+        <span class="badge badge-pickup">可取货</span>
+      </a>
+    `).join('') + '</div>';
+}
+
+document.getElementById('q').addEventListener('input', render);
+render();
+</script>
+</body>
+</html>

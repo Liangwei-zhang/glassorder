@@ -1,0 +1,124 @@
+#!/usr/bin/env node
+/* Browser QA for boss piece-level pickup batch flow. */
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require('playwright');
+
+const BASE = process.env.BASE || 'http://localhost:8781';
+const ROOT = path.join(__dirname, '..');
+const SAMPLE_PDF = path.join(ROOT, 'Glass Order - 2605011 Inspire --8 Heritage Cove.pdf');
+
+async function api(apiPath, opts = {}) {
+  const res = await fetch(BASE + apiPath, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (err) { data = text; }
+  if (!res.ok) throw new Error(`${apiPath} ${res.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+async function login(name, password) {
+  return api('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ login: name, password }),
+  });
+}
+function auth(session) { return { Authorization: `Bearer ${session.token}` }; }
+
+async function createReadyOrder(session, customerId, stamp, suffix) {
+  const pdf = Buffer.concat([fs.readFileSync(SAMPLE_PDF), Buffer.from(`\n% browser pickup ${stamp} ${suffix}\n`)]);
+  const form = new FormData();
+  form.set('customer_id', String(customerId));
+  form.set('priority', 'normal');
+  form.set('deadline', '2026-05-30');
+  form.set('pdf', new File([pdf], `browser-pickup-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
+  const created = await api('/api/orders', { method: 'POST', headers: auth(session), body: form });
+  const detail = await api(`/api/orders/${created.order.id}`, { headers: auth(session) });
+  await api('/api/pieces/batch', {
+    method: 'POST',
+    headers: { ...auth(session), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'complete', piece_ids: detail.order.pieces.map(p => p.id) }),
+  });
+  await api(`/api/orders/${created.order.id}/ready`, { method: 'POST', headers: auth(session) });
+  return created.order.id;
+}
+
+async function seedCustomerWithOrders(session) {
+  const stamp = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const c = await api('/api/customers', {
+    method: 'POST',
+    headers: { ...auth(session), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company: `Browser Pickup ${stamp}`, contact_name: 'QA', email: `browser-pickup-${stamp}@example.test` }),
+  });
+  await createReadyOrder(session, c.customer.id, stamp, 'A');
+  await createReadyOrder(session, c.customer.id, stamp, 'B');
+  return c.customer;
+}
+
+async function draw(page) {
+  const box = await page.locator('#sig').boundingBox();
+  if (!box) throw new Error('signature canvas missing');
+  const points = [
+    { clientX: box.x + 20, clientY: box.y + 30 },
+    { clientX: box.x + 55, clientY: box.y + 48 },
+    { clientX: box.x + 90, clientY: box.y + 62 },
+    { clientX: box.x + 120, clientY: box.y + 70 },
+  ];
+  await page.dispatchEvent('#sig', 'pointerdown', { ...points[0], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+  for (const point of points.slice(1)) {
+    await page.dispatchEvent('#sig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+  }
+  await page.dispatchEvent('#sig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+}
+
+(async () => {
+  const boss = await login('bossdemo', 'boss123456');
+  const customer = await seedCustomerWithOrders(boss);
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
+  page.on('pageerror', err => errors.push(err.message));
+  try {
+    await page.goto(BASE + '/login.html', { waitUntil: 'domcontentloaded' });
+    await page.evaluate(({ token, user }) => {
+      localStorage.setItem('glassorder_token', token);
+      localStorage.setItem('glassorder_user', JSON.stringify(user));
+      localStorage.setItem('glassorder_lang', 'zh');
+    }, { token: boss.token, user: boss.user });
+    await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
+    await page.fill('#customerPicker input[type="search"]', customer.company);
+    await page.locator(`.customer-picker-option[data-id="${customer.id}"]`).click();
+    await page.waitForSelector('[data-piece]');
+    const checks = await page.locator('[data-piece]').count();
+    if (checks < 16) throw new Error(`expected at least 16 available pieces, got ${checks}`);
+    await page.locator('[data-piece]').nth(0).check();
+    await page.locator('[data-piece]').nth(8).check();
+    await page.fill('#name', 'Browser Pickup Signer');
+    await draw(page);
+    await page.click('#submitBtn');
+    await page.waitForSelector('.modal-backdrop.open');
+    await page.locator('.modal-backdrop.open [data-role="ok"]').click();
+    await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
+    await page.waitForSelector('a[href^="/uploads/slips/"]');
+    const detailText = await page.locator('#body').textContent();
+    if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '')) throw new Error('batch detail did not render pieces');
+    page.once('dialog', async dialog => {
+      await dialog.accept('browser qa revert');
+    });
+    await page.locator('button', { hasText: /回退|Revert/ }).first().click();
+    await page.waitForTimeout(600);
+    const after = await page.locator('#body').textContent();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    if (!/已回退|Reverted/.test(after || '')) throw new Error('reverted marker missing');
+    if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px`);
+    if (errors.length) throw new Error(errors.join(' | '));
+    console.log(`PICKUP BATCH BROWSER QA PASS customer=${customer.id} url=${page.url()}`);
+  } finally {
+    await browser.close();
+  }
+})().catch((err) => {
+  console.error(err.stack || err.message);
+  process.exit(1);
+});

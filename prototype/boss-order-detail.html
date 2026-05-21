@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>订单详情</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="topbar">
+  <a href="boss-dashboard.html" class="back-btn">‹</a>
+  <div class="topbar-title" id="title">订单详情</div>
+</div>
+
+<div class="center-col page-pad-bottom" style="padding: 16px;">
+  <div id="body"></div>
+</div>
+
+<div class="action-bar" id="actions"></div>
+
+<script src="data.js"></script>
+<script>
+const id = new URLSearchParams(location.search).get('id') || '2605011';
+const state = loadState();
+const o = state.orders.find(x => x.id === id);
+
+if (!o) {
+  document.getElementById('body').innerHTML = '<div class="card">订单不存在</div>';
+} else {
+  document.getElementById('title').textContent = `#${o.id} · ${o.company}`;
+
+  const pct = orderProgress(o);
+  const rw  = reworkCount(o);
+  const bk  = brokenCount(o);
+
+  // Stage-by-stage counts: how many pieces are currently at each stage
+  const byStage = {};
+  STAGES.forEach(s => byStage[s] = 0);
+  o.pieces.forEach(p => { if (!p.broken && byStage[p.stage] !== undefined) byStage[p.stage]++; });
+
+  const stageRow = STAGES.map(s => {
+    const count = byStage[s];
+    const icon = s === 'cut' ? '✂️' : s === 'edge' ? '🔧' : s === 'tempered' ? '🔥' : '✅';
+    const label = s === 'finished' ? '已完成' : `${STAGE_ZH[s]} 待做`;
+    return `
+      <div class="card" style="padding: 12px; margin-bottom: 8px;">
+        <div style="display:flex; align-items:center; gap: 10px;">
+          <div style="font-size: 20px;">${icon}</div>
+          <div style="flex:1; font-weight: 700;">${label}</div>
+          <div style="font-weight: 800; font-size: 20px; color: ${count > 0 && s !== 'finished' ? '#d97706' : '#059669'};">${count}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Broken / rework sidebar
+  const reworkPieces = o.pieces.filter(p => p.rework).map(p => p.n);
+  const holdPieces = o.pieces.filter(p => p.hold).map(p => p.n);
+
+  document.getElementById('body').innerHTML = `
+    <!-- Header summary -->
+    <div class="card" style="margin-bottom: 12px;">
+      <div style="display:flex; justify-content: space-between; align-items: center;">
+        <div>
+          <div style="font-size: 14px; color: #6b7280;">${o.project}</div>
+          <div style="margin-top: 4px;">
+            ${o.priority === 'rush' ? '<span class="badge badge-rush">🔥 加急</span>' : ''}
+            ${isOverdue(o) ? '<span class="badge" style="background:#fef3c7; color:#92400e;">⏰ 逾期</span>' : ''}
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size: 28px; font-weight: 800; color: ${pct === 100 ? '#059669' : '#2563eb'};">${pct}%</div>
+          <div style="font-size: 12px; color:#6b7280;">整体进度</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px;">
+        <div style="text-align:center; padding: 8px; background:#f9fafb; border-radius:10px;">
+          <div style="font-weight:700; font-size: 18px;">${o.totalPieces}</div>
+          <div style="font-size: 11px; color:#6b7280;">总片数</div>
+        </div>
+        <div style="text-align:center; padding: 8px; background:#f9fafb; border-radius:10px;">
+          <div style="font-weight:700; font-size: 18px; color:${rw > 0 ? '#dc2626' : '#059669'};">${rw}</div>
+          <div style="font-size: 11px; color:#6b7280;">待补片</div>
+        </div>
+        <div style="text-align:center; padding: 8px; background:#f9fafb; border-radius:10px;">
+          <div style="font-weight:700; font-size: 18px;">${bk}</div>
+          <div style="font-size: 11px; color:#6b7280;">已碎</div>
+        </div>
+      </div>
+    </div>
+
+    ${rw > 0 ? `
+      <div class="card" style="background:#fee2e2; color:#991b1b; margin-bottom:12px;">
+        <div style="font-weight: 700; display:flex; align-items:center; gap:8px;">
+          <span style="font-size: 20px;">⚠️</span> ${rw} 片需补切
+        </div>
+        <div style="font-size: 13px; margin-top: 6px;">编号: #${reworkPieces.join(' #')}</div>
+        <div style="font-size: 12px; margin-top: 6px; opacity: .8;">切玻璃工位已自动收到通知</div>
+      </div>` : ''}
+
+    ${holdPieces.length > 0 ? `
+      <div class="card" style="background:#fef3c7; color:#92400e; margin-bottom:12px;">
+        <div style="font-weight: 700;">⏸ HOLD 片: #${holdPieces.join(' #')}</div>
+        <div style="font-size: 12px; margin-top: 4px; opacity: .8;">等待老板确认后再进入流程</div>
+      </div>` : ''}
+
+    <!-- Stage breakdown -->
+    <div style="font-weight: 700; margin-bottom: 8px; padding: 0 4px;">工序进度</div>
+    ${stageRow}
+
+    <!-- View pieces link -->
+    <a class="card tap" href="worker-pieces.html?id=${o.id}&stage=all" style="margin-top: 12px; display:flex; align-items:center; gap: 10px; text-decoration: none; color: inherit;">
+      <div style="font-size: 22px;">🧩</div>
+      <div style="flex:1;">
+        <div style="font-weight: 700;">查看所有 ${o.totalPieces} 片玻璃</div>
+        <div style="font-size: 12px; color:#6b7280;">可视化网格，定位任一片</div>
+      </div>
+      <div style="color:#9ca3af; font-size: 20px;">›</div>
+    </a>
+
+    ${o.note ? `<div class="card" style="margin-top: 12px; font-size: 14px; color:#4b5563;">📝 ${o.note}</div>` : ''}
+
+    <div style="display:flex; gap: 8px; margin-top: 12px;">
+      <a class="btn btn-ghost" style="flex:1;" href="#">📄 导出 PDF</a>
+      <a class="btn btn-ghost" style="flex:1;" href="#">📷 看图纸</a>
+    </div>
+  `;
+
+  // Bottom actions
+  const ab = document.getElementById('actions');
+  if (o.status === 'ready_pickup') {
+    ab.innerHTML = `<a class="btn btn-success" href="pickup-sign.html?id=${o.id}">📝 调出取货签字</a>`;
+  } else if (pct === 100 && o.status !== 'ready_pickup') {
+    ab.innerHTML = `
+      <a class="btn btn-ghost" href="boss-dashboard.html">返回</a>
+      <button class="btn btn-primary" onclick="markReady()">✅ 通知可取货</button>`;
+  } else {
+    ab.innerHTML = `
+      <a class="btn btn-ghost" href="boss-dashboard.html">返回</a>
+      <a class="btn btn-warn" href="#" onclick="alert('已向客户发送进度更新'); return false;">📧 通知客户</a>`;
+  }
+}
+
+function markReady() {
+  const state = loadState();
+  const ord = state.orders.find(x => x.id === id);
+  ord.status = 'ready_pickup';
+  saveState(state);
+  alert('已发送取货通知给客户和前台');
+  location.reload();
+}
+</script>
+</body>
+</html>

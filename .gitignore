@@ -1,0 +1,14 @@
+node_modules/
+backend/node_modules/
+backend/.env
+backend/logs/
+.claude/
+memory/
+*.zip
+
+# Runtime data
+backend/glass.db
+backend/glass.db-*
+backend/uploads/**
+!backend/uploads/
+!backend/uploads/.gitkeep

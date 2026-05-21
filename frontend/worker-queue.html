@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Worker Queue</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-title" data-i18n="myWork">我的工位</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col page-pad-bottom worker-shell">
+  <div class="card worker-hero">
+    <div class="worker-hero-copy">
+      <div class="worker-hero-label" id="heroLabel"></div>
+      <div class="worker-hero-sub" id="heroSub"></div>
+    </div>
+    <div class="worker-hero-num num title-tight" id="heroNum">—</div>
+  </div>
+
+  <div class="card worker-stage-card">
+    <div class="worker-stage-label" id="myStageLabel" data-i18n="requiredSteps">我负责的工序</div>
+    <div class="worker-stage-grid">
+      <button class="stage-btn btn tap" data-stage="cut"><span data-i18n="stageCut">切玻璃</span></button>
+      <button class="stage-btn btn tap" data-stage="edge"><span data-i18n="stageEdge">开切口</span></button>
+      <button class="stage-btn btn tap" data-stage="tempered"><span data-i18n="stageTempered">钢化</span></button>
+    </div>
+  </div>
+
+  <div id="rework-banner"></div>
+  <div class="worker-list-title">
+    <span data-i18n="myWork">我的待做</span>
+    <span id="listCount"></span>
+  </div>
+  <div id="list"></div>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = ensureAuth();
+const pageUser = pageAllowed && typeof getUser === 'function' ? getUser() : null;
+if (pageUser && pageUser.role === 'boss') injectBossNav('shop');
+let currentStage = 'cut';
+let pieces = [];
+let reworkPieces = [];
+let firstLoad = true;
+
+async function setStage(stage) {
+  currentStage = stage;
+  document.querySelectorAll('.stage-btn').forEach(b => {
+    const on = b.dataset.stage === stage;
+    b.className = 'stage-btn btn tap ' + (on ? 'btn-primary' : 'btn-ghost');
+  });
+  await loadPieces();
+}
+
+async function loadPieces() {
+  if (firstLoad) {
+    document.getElementById('list').innerHTML = skeletonRows(3);
+  }
+  const data = await api('/api/pieces?stage=' + currentStage + '&include_rework=1');
+  pieces = data.pieces.filter(p => p.order_status !== 'picked_up');
+  reworkPieces = (data.rework || []).filter(p => p.order_status !== 'picked_up');
+  render();
+  firstLoad = false;
+}
+
+function render() {
+  const banner = document.getElementById('rework-banner');
+  const listEl = document.getElementById('list');
+
+  const activePieces = pieces.filter(p => p.stage !== 'finished' && p.order_status !== 'picked_up');
+
+  // Hero: pending count for current stage
+  const stageName = stageLabel(currentStage);
+  document.getElementById('heroLabel').textContent = stageName;
+  document.getElementById('heroNum').textContent = activePieces.length;
+  document.getElementById('listCount').textContent = activePieces.length
+    ? tn('piecesShortN', { n: activePieces.length })
+    : '';
+  document.getElementById('heroSub').textContent = activePieces.length === 0
+    ? t('workerQueueEmpty')
+    : tn('myPendingN', { stage: stageName, n: activePieces.length });
+
+  if (reworkPieces.length > 0) {
+    banner.innerHTML = `
+      <div class="card worker-rework-alert">
+        <div style="font-weight: 700; font-size: 16px;">${esc(tn('reworkAlertN', { n: reworkPieces.length }))}</div>
+        <div>
+          ${reworkPieces.map(p => `<a href="worker-pieces.html?id=${p.order_id}&stage=cut&from=worker">#${esc(p.order_number)} ${esc(tn('pieceN', { n: p.piece_no }))}</a>`).join('')}
+        </div>
+      </div>`;
+  } else {
+    banner.innerHTML = '';
+  }
+
+  if (activePieces.length === 0) {
+    listEl.innerHTML = emptyState(t('workerQueueEmpty'));
+    return;
+  }
+
+  const byCompany = {};
+  activePieces.forEach(p => {
+    if (!byCompany[p.company]) byCompany[p.company] = {};
+    if (!byCompany[p.company][p.order_id]) byCompany[p.company][p.order_id] = [];
+    byCompany[p.company][p.order_id].push(p);
+  });
+
+  listEl.innerHTML = Object.entries(byCompany).map(([company, orders]) => `
+    <div class="worker-company">
+      <div class="worker-company-title">${esc(company)}</div>
+      <div class="card" style="padding: 0; overflow: hidden;">
+        ${Object.values(orders).map(list => {
+          const first = list[0];
+          const pending = list.length;
+          const reworkHere = list.filter(p => p.rework).length;
+          return `
+            <a class="row worker-order-row" href="worker-pieces.html?id=${first.order_id}&stage=${currentStage}&from=worker">
+              <div class="worker-order-main">
+                <div class="worker-order-info">
+                  <div class="row-title">
+                    #${esc(first.order_number)}
+                    ${first.priority === 'rush' ? `<span class="badge badge-rush" style="margin-left:6px;">${esc(t('badgeRush'))}</span>` : ''}
+                    ${reworkHere > 0 ? `<span class="badge badge-rework" style="margin-left:6px;">${esc(tn('badgeReworkN', { n: reworkHere }))}</span>` : ''}
+                  </div>
+                  <div class="row-sub">${esc(first.project_name || '')}</div>
+                </div>
+                <div class="worker-pending-pill">
+                  <div class="count">${pending}</div>
+                  <div class="label">${esc(t('pcPending'))}</div>
+                </div>
+              </div>
+            </a>`;
+        }).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+function onLangChange() { render(); }
+
+document.querySelectorAll('.stage-btn').forEach(b => {
+  b.addEventListener('click', () => setStageOrError(b.dataset.stage));
+});
+function setStageOrError(stage) {
+  setStage(stage).catch(err => {
+    document.getElementById('list').innerHTML = errorState(err.message, t('retry'), () => setStageOrError(stage));
+    toast(err.message, { type: 'danger' });
+  });
+}
+if (pageAllowed) setStageOrError('cut');
+</script>
+</body>
+</html>

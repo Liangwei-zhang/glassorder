@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>片子网格</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<div class="topbar">
+  <a href="#" id="backBtn" class="back-btn">‹</a>
+  <div>
+    <div style="font-size: 11px; color: #6b7280;" id="sub">订单 ·</div>
+    <div style="font-size: 17px; font-weight: 700;" id="title">片子网格</div>
+  </div>
+</div>
+
+<!-- Stage tabs -->
+<div style="background: white; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; overflow-x: auto; white-space: nowrap; position: sticky; top: 68px; z-index: 5;">
+  <button class="stage-tab" data-stage="all">全部</button>
+  <button class="stage-tab" data-stage="cut">✂️ 切</button>
+  <button class="stage-tab" data-stage="edge">🔧 开切口</button>
+  <button class="stage-tab" data-stage="tempered">🔥 钢化</button>
+  <button class="stage-tab" data-stage="finished">✅ 完成</button>
+</div>
+
+<!-- Legend -->
+<div class="center-col" style="padding: 10px 16px 0;">
+  <div class="card" style="padding: 10px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 10px;">
+    <span><span style="display:inline-block; width:14px; height:14px; background:#e5e7eb; border-radius:3px; vertical-align:middle;"></span> 待做</span>
+    <span><span style="display:inline-block; width:14px; height:14px; background:#dbeafe; border: 2px solid #3b82f6; border-radius:3px; vertical-align:middle;"></span> 在做</span>
+    <span><span style="display:inline-block; width:14px; height:14px; background:#d1fae5; border-radius:3px; vertical-align:middle;"></span> 已完成</span>
+    <span><span style="display:inline-block; width:14px; height:14px; background:#fee2e2; border:2px solid #ef4444; border-radius:3px; vertical-align:middle;"></span> 需补</span>
+    <span><span style="display:inline-block; width:14px; height:14px; background:#fef3c7; border:2px solid #f59e0b; border-radius:3px; vertical-align:middle;"></span> HOLD</span>
+    <span><span style="display:inline-block; width:14px; height:14px; background:#111827; border-radius:3px; vertical-align:middle;"></span> 已碎</span>
+  </div>
+</div>
+
+<!-- Summary header -->
+<div class="center-col" style="padding: 10px 16px 0;">
+  <div id="summary" style="padding: 4px; font-size: 13px; color:#6b7280;"></div>
+</div>
+
+<!-- Grid -->
+<div class="center-col page-pad-bottom" style="padding: 8px 16px 100px;">
+  <div id="grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;"></div>
+
+  <div id="empty" style="display:none; text-align:center; color:#9ca3af; padding: 60px 20px;">
+    <div style="font-size: 40px; margin-bottom: 10px;">✨</div>
+    <div>本工序已无待处理片</div>
+  </div>
+</div>
+
+<!-- Action bar: bulk select -->
+<div class="action-bar" id="actionBar">
+  <div id="bulkBar" style="display:none; flex:1; gap:10px; display:flex;">
+    <button class="btn btn-ghost" onclick="clearSel()" style="flex:0.5;">取消 (<span id="selCnt">0</span>)</button>
+    <button class="btn btn-success" onclick="bulkDone()" style="flex:1;">✅ 批量完成</button>
+  </div>
+  <div id="normalBar" style="flex:1; gap:10px; display:flex;">
+    <a class="btn btn-ghost" id="backBtn2" href="#" style="flex:0.5;">返回</a>
+    <button class="btn btn-primary" onclick="toggleBulk()" style="flex:1;">📋 批量选择</button>
+  </div>
+</div>
+
+<!-- Per-piece action modal -->
+<div class="modal-backdrop" id="pieceModal">
+  <div class="modal">
+    <div style="text-align:center; margin-bottom: 12px;">
+      <div style="font-size: 22px; font-weight: 800;" id="mTitle">#</div>
+      <div style="color:#6b7280; margin-top: 2px; font-size: 13px;" id="mSub">规格</div>
+    </div>
+
+    <!-- Drawing thumbnail — the key missing piece -->
+    <div id="mDrawing" style="margin-bottom: 12px; background: #fafafa; border-radius: 10px; overflow: hidden; cursor: zoom-in; position: relative;" onclick="openFullDrawing()"></div>
+
+    <div id="mStatus" style="padding: 12px; background:#f9fafb; border-radius: 10px; margin-bottom: 12px; text-align:center; font-size: 14px;"></div>
+
+    <div id="mActions" style="display:flex; flex-direction: column; gap: 10px;"></div>
+
+    <button class="btn btn-ghost" style="width:100%; margin-top: 14px;" onclick="closeModal()">关闭</button>
+  </div>
+</div>
+
+<!-- Full-screen drawing viewer -->
+<div class="modal-backdrop" id="drawingModal" style="background: rgba(0,0,0,.95); align-items: center;">
+  <div style="width: 100%; height: 100vh; display:flex; flex-direction: column;">
+    <div style="padding: 12px 16px; color: white; display:flex; align-items: center; gap: 12px;">
+      <button onclick="closeModal()" style="background:none; border:none; color:white; font-size: 28px; cursor: pointer;">×</button>
+      <div style="flex:1;">
+        <div style="font-size: 16px; font-weight: 700;" id="fullTitle">第 X 片</div>
+        <div style="font-size: 12px; opacity: .8;" id="fullSub">规格</div>
+      </div>
+      <div style="font-size: 12px; opacity: .7;" id="zoomLabel">100%</div>
+    </div>
+
+    <div id="viewer" style="flex:1; overflow: hidden; position: relative; touch-action: none; background: #222;">
+      <img id="fullDrawing" style="position: absolute; left: 0; top: 0; transform-origin: 0 0; background: white; user-select: none; -webkit-user-drag: none;">
+    </div>
+
+    <div style="padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0)); display: flex; gap: 10px;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="zoomBy(1/1.5)">➖ 缩小</button>
+      <button class="btn btn-ghost" style="flex:1;" onclick="zoomReset()">重置</button>
+      <button class="btn btn-ghost" style="flex:1;" onclick="zoomBy(1.5)">➕ 放大</button>
+    </div>
+  </div>
+</div>
+
+<!-- Broken confirmation modal -->
+<div class="modal-backdrop" id="brokenModal">
+  <div class="modal">
+    <div style="text-align:center;">
+      <div style="font-size: 48px;">💥</div>
+      <div style="font-size: 22px; font-weight: 800; margin-top: 10px;">确认上报碎片</div>
+      <div style="color: #6b7280; margin-top: 8px;" id="brokenDesc"></div>
+    </div>
+    <div style="background: #fee2e2; color: #991b1b; padding: 12px; border-radius: 10px; margin: 16px 0; font-size: 14px;">
+      ✓ 这片玻璃标记为已碎<br>
+      ✓ 自动通知切玻璃工位补做一片<br>
+      ✓ 老板面板显示待补提醒
+    </div>
+    <label class="form-label">备注（可选）</label>
+    <input class="form-input" id="brokenNote" placeholder="如: 开切口时边角裂开">
+    <div style="display:flex; gap: 10px; margin-top: 14px;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="closeModal()">取消</button>
+      <button class="btn btn-danger" style="flex:1;" onclick="confirmBroken()">确认上报</button>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const orderId = params.get('id') || '2605011';
+const initialStage = params.get('stage') || 'all';
+
+const state = loadState();
+const order = state.orders.find(o => o.id === orderId);
+
+let currentStage = initialStage;
+let bulkMode = false;
+let selected = new Set();
+let currentPieceN = null;
+
+// Back button logic: if came from worker queue, go back there; otherwise dashboard
+const referer = document.referrer || '';
+const backTarget = referer.includes('worker-queue') ? 'worker-queue.html' : 'boss-order-detail.html?id=' + orderId;
+document.getElementById('backBtn').href = backTarget;
+document.getElementById('backBtn2').href = backTarget;
+
+function headerRender() {
+  if (!order) return;
+  document.getElementById('sub').textContent = `#${order.id} · ${order.project}`;
+  document.getElementById('title').textContent = order.company;
+}
+headerRender();
+
+function setStageTab(stage) {
+  currentStage = stage;
+  document.querySelectorAll('.stage-tab').forEach(b => {
+    const on = b.dataset.stage === stage;
+    b.style.cssText = `padding: 8px 14px; border-radius: 999px; border: none; font-weight: 600; margin-right: 6px; cursor: pointer; ${on ? 'background:#111827; color:white;' : 'background:#f3f4f6; color:#111827;'}`;
+  });
+  render();
+}
+
+function piecesInView() {
+  if (!order) return [];
+  if (currentStage === 'all') return order.pieces;
+  return order.pieces.filter(p => !p.broken && p.stage === currentStage);
+}
+
+function render() {
+  if (!order) {
+    document.getElementById('grid').innerHTML = '<div style="grid-column: 1/-1;">订单不存在</div>';
+    return;
+  }
+  const pieces = piecesInView();
+  const grid = document.getElementById('grid');
+  const empty = document.getElementById('empty');
+
+  if (pieces.length === 0) {
+    grid.style.display = 'none';
+    empty.style.display = 'block';
+  } else {
+    grid.style.display = 'grid';
+    empty.style.display = 'none';
+    grid.innerHTML = pieces.map(p => {
+      const sel = selected.has(p.n) ? 'outline: 3px solid #2563eb; outline-offset: 2px;' : '';
+      const sizeShort = (p.size || '').replace(/ ×.*/, '×…');
+      return `<div class="${pieceClass(p)}" style="${sel}" data-n="${p.n}" onclick="pieceTap(${p.n})">
+        <div>${p.n}</div>
+        <div class="psize">${sizeShort}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Summary
+  const total = order.pieces.length;
+  const done  = order.pieces.filter(p => p.stage === 'finished').length;
+  const rework = reworkCount(order);
+  const broken = brokenCount(order);
+  document.getElementById('summary').innerHTML =
+    `共 ${total} 片 · 已完成 ${done} · 需补 <b style="color:#dc2626;">${rework}</b> · 已碎 ${broken} · 当前查看 <b>${pieces.length}</b> 片`;
+
+  document.getElementById('selCnt').textContent = selected.size;
+}
+
+function pieceTap(n) {
+  if (bulkMode) {
+    if (selected.has(n)) selected.delete(n);
+    else selected.add(n);
+    render();
+    return;
+  }
+  openPieceModal(n);
+}
+
+function openPieceModal(n) {
+  const p = order.pieces.find(x => x.n === n);
+  currentPieceN = n;
+  document.getElementById('mTitle').textContent = `第 ${n} 片 · ${p.thickness} ${p.type}`;
+  document.getElementById('mSub').textContent = `${p.size}${p.weight ? ' · ' + p.weight : ''}${p.note ? ' · ' + p.note : ''}`;
+
+  // Drawing thumbnail
+  const dEl = document.getElementById('mDrawing');
+  if (p.drawing) {
+    dEl.innerHTML = `
+      <img src="${p.drawing}" style="width: 100%; display:block;" onerror="this.parentElement.innerHTML='<div style=\\'padding:40px;text-align:center;color:#dc2626;\\'>⚠️ 图纸加载失败: ${p.drawing}</div>'">
+      <div style="position:absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.7); color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px;">🔍 点击看大图</div>`;
+  } else {
+    dEl.innerHTML = `<div style="padding: 40px; text-align: center; color: #9ca3af;">未上传图纸</div>`;
+  }
+
+  // Status: current stage is the stage the worker viewing sees
+  const currentStageName = STAGE_ZH[currentStage] || STAGE_ZH[p.stage];
+  let statusHtml = '';
+  if (p.rework)      statusHtml = `<b style="color:#dc2626;">🔴 ${currentStageName} · 需补切 · 请优先处理</b>`;
+  else if (p.hold)   statusHtml = `<b style="color:#d97706;">⏸ HOLD · 等待老板确认</b>`;
+  else if (p.stage === 'finished') statusHtml = `<b style="color:#059669;">✅ 已完成全部工序</b>`;
+  else               statusHtml = `<b>当前工序: ${STAGE_ZH[p.stage]}</b>`;
+  document.getElementById('mStatus').innerHTML = statusHtml;
+
+  // Actions:
+  // - If piece is finished (all stages done): no actions
+  // - If HOLD: only allow toggling HOLD off, plus "broken"
+  // - Otherwise: complete-current-stage + broken + toggle HOLD
+  const ab = document.getElementById('mActions');
+  if (p.stage === 'finished') {
+    ab.innerHTML = `<div style="text-align:center; color:#6b7280;">此片已完成全部工序</div>`;
+  } else if (p.hold) {
+    ab.innerHTML = `
+      <button class="btn btn-ghost tap-lg" onclick="toggleHold(${n})">▶️ 解除 HOLD</button>
+      <button class="btn btn-danger tap-lg" onclick="askBroken(${n})">💥 碎了 / 需补做</button>`;
+  } else {
+    const nextStage = STAGES[STAGES.indexOf(p.stage) + 1];
+    const nextLabel = nextStage === 'finished' ? '✅ 本片完成' : `✅ ${STAGE_ZH[p.stage]} 完成 → 送往${STAGE_ZH[nextStage]}`;
+    ab.innerHTML = `
+      <button class="btn btn-success tap-lg" onclick="completeStage(${n})">${nextLabel}</button>
+      <button class="btn btn-danger tap-lg" onclick="askBroken(${n})">💥 碎了 / 需补做</button>
+      <button class="btn btn-warn" onclick="toggleHold(${n})">⏸ 标记 HOLD</button>
+    `;
+  }
+  document.getElementById('pieceModal').classList.add('open');
+}
+
+function completeStage(n) {
+  const p = order.pieces.find(x => x.n === n);
+  advancePieceStage(p);
+  saveState(state);
+  closeModal();
+  render();
+  toast(p.stage === 'finished' ? `#${order.id} 第 ${n} 片 ✅ 全部完成` : `#${order.id} 第 ${n} 片 → ${STAGE_ZH[p.stage]}`);
+}
+
+function openFullDrawing() {
+  const p = order.pieces.find(x => x.n === currentPieceN);
+  if (!p || !p.drawing) return;
+  document.getElementById('fullTitle').textContent = `第 ${currentPieceN} 片 · ${p.thickness} ${p.type}`;
+  document.getElementById('fullSub').textContent = `${p.size}${p.weight ? ' · ' + p.weight : ''}`;
+  const img = document.getElementById('fullDrawing');
+  img.src = p.drawing;
+  img.onload = () => {
+    fitImageToViewer();
+  };
+  document.getElementById('pieceModal').classList.remove('open');
+  document.getElementById('drawingModal').classList.add('open');
+}
+
+// --- Pan/zoom viewer state ---
+let zoomState = { scale: 1, tx: 0, ty: 0, minScale: 0.1, maxScale: 8 };
+
+function applyTransform() {
+  const img = document.getElementById('fullDrawing');
+  img.style.transform = `translate(${zoomState.tx}px, ${zoomState.ty}px) scale(${zoomState.scale})`;
+  const lbl = document.getElementById('zoomLabel');
+  if (lbl) lbl.textContent = Math.round(zoomState.scale * 100 / zoomState.fitScale) + '%';
+}
+
+function fitImageToViewer() {
+  const img = document.getElementById('fullDrawing');
+  const viewer = document.getElementById('viewer');
+  if (!img.naturalWidth || !viewer) return;
+  const vw = viewer.clientWidth;
+  const vh = viewer.clientHeight;
+  const scale = Math.min(vw / img.naturalWidth, vh / img.naturalHeight);
+  zoomState.fitScale = scale;
+  zoomState.scale = scale;
+  zoomState.minScale = scale * 0.5;
+  zoomState.maxScale = scale * 10;
+  zoomState.tx = (vw - img.naturalWidth * scale) / 2;
+  zoomState.ty = (vh - img.naturalHeight * scale) / 2;
+  applyTransform();
+}
+
+function zoomBy(factor, cx, cy) {
+  const viewer = document.getElementById('viewer');
+  if (cx === undefined) { cx = viewer.clientWidth / 2; cy = viewer.clientHeight / 2; }
+  const newScale = Math.max(zoomState.minScale, Math.min(zoomState.maxScale, zoomState.scale * factor));
+  const actualFactor = newScale / zoomState.scale;
+  // Zoom toward the center point (cx, cy)
+  zoomState.tx = cx - (cx - zoomState.tx) * actualFactor;
+  zoomState.ty = cy - (cy - zoomState.ty) * actualFactor;
+  zoomState.scale = newScale;
+  applyTransform();
+}
+
+function zoomReset() {
+  fitImageToViewer();
+}
+
+// Touch / mouse handlers
+(function setupViewer() {
+  const viewer = document.getElementById('viewer');
+  if (!viewer) return;
+
+  let pointers = new Map();
+  let lastPinchDist = 0;
+  let lastPinchCenter = null;
+  let panLast = null;
+  let lastTapTime = 0;
+
+  viewer.addEventListener('pointerdown', (e) => {
+    viewer.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      panLast = { x: e.clientX, y: e.clientY };
+      // Double tap detection
+      const now = Date.now();
+      if (now - lastTapTime < 300) {
+        const rect = viewer.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        if (zoomState.scale > zoomState.fitScale * 1.2) {
+          zoomReset();
+        } else {
+          zoomBy(2.5, cx, cy);
+        }
+      }
+      lastTapTime = now;
+    } else if (pointers.size === 2) {
+      const pts = Array.from(pointers.values());
+      lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const rect = viewer.getBoundingClientRect();
+      lastPinchCenter = {
+        x: (pts[0].x + pts[1].x) / 2 - rect.left,
+        y: (pts[0].y + pts[1].y) / 2 - rect.top,
+      };
+      panLast = null;
+    }
+  });
+
+  viewer.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointers.size === 1 && panLast) {
+      zoomState.tx += e.clientX - panLast.x;
+      zoomState.ty += e.clientY - panLast.y;
+      panLast = { x: e.clientX, y: e.clientY };
+      applyTransform();
+    } else if (pointers.size === 2) {
+      const pts = Array.from(pointers.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (lastPinchDist > 0) {
+        const factor = dist / lastPinchDist;
+        zoomBy(factor, lastPinchCenter.x, lastPinchCenter.y);
+      }
+      lastPinchDist = dist;
+    }
+  });
+
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) lastPinchDist = 0;
+    if (pointers.size === 0) panLast = null;
+    else if (pointers.size === 1) {
+      const p = Array.from(pointers.values())[0];
+      panLast = { x: p.x, y: p.y };
+    }
+  };
+  viewer.addEventListener('pointerup', endPointer);
+  viewer.addEventListener('pointercancel', endPointer);
+  viewer.addEventListener('pointerleave', endPointer);
+
+  // Mouse wheel zoom on desktop
+  viewer.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = viewer.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, cx, cy);
+  }, { passive: false });
+})();
+
+function closeModal() {
+  document.getElementById('pieceModal').classList.remove('open');
+  document.getElementById('brokenModal').classList.remove('open');
+  document.getElementById('drawingModal').classList.remove('open');
+}
+
+function askBroken(n) {
+  closeModal();
+  document.getElementById('brokenDesc').textContent = `#${order.id} 第 ${n} 片`;
+  document.getElementById('brokenNote').value = '';
+  document.getElementById('brokenModal').classList.add('open');
+}
+
+function confirmBroken() {
+  const p = order.pieces.find(x => x.n === currentPieceN);
+  const pieceN = currentPieceN;
+  const prevStage = p.stage;
+  // Broken -> rework at cut stage (factory keeps same piece number, re-cut from scratch)
+  p.rework = true;
+  p.stage = 'cut';
+  p.stageStatus = 'pending';
+  saveState(state);
+  closeModal();
+  // Jump to cut tab so the worker sees the piece has moved back to the start
+  setStageTab('cut');
+  const stageLabel = STAGE_ZH[prevStage] || prevStage;
+  toast(`#${order.id} 第 ${pieceN} 片在 ${stageLabel} 工序碎了 · 已退回切玻璃重做`);
+}
+
+function toggleHold(n) {
+  const p = order.pieces.find(x => x.n === n);
+  p.hold = !p.hold;
+  saveState(state);
+  closeModal();
+  render();
+}
+
+function toggleBulk() {
+  bulkMode = !bulkMode;
+  selected.clear();
+  document.getElementById('normalBar').style.display = bulkMode ? 'none' : 'flex';
+  document.getElementById('bulkBar').style.display = bulkMode ? 'flex' : 'none';
+  render();
+}
+function clearSel() {
+  selected.clear();
+  render();
+}
+function bulkDone() {
+  if (selected.size === 0) { alert('请先选择片子'); return; }
+  selected.forEach(n => {
+    const p = order.pieces.find(x => x.n === n);
+    if (p && !p.hold && !p.broken && p.stage !== 'finished') {
+      advancePieceStage(p);
+    }
+  });
+  saveState(state);
+  selected.clear();
+  bulkMode = false;
+  document.getElementById('normalBar').style.display = 'flex';
+  document.getElementById('bulkBar').style.display = 'none';
+  render();
+  toast('已批量推进到下一工序');
+}
+
+function toast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: #111827; color: white; padding: 12px 20px; border-radius: 10px; z-index: 200; font-size: 14px; max-width: 90%;';
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+document.querySelectorAll('.stage-tab').forEach(b => {
+  b.addEventListener('click', () => setStageTab(b.dataset.stage));
+});
+document.getElementById('pieceModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('brokenModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('drawingModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+setStageTab(initialStage);
+</script>
+</body>
+</html>

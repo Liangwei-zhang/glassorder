@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Orders</title>
+<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+<script>
+location.replace('boss-dashboard.html');
+</script>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-title" data-i18n="navOrders">订单</div>
+  <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col boss-shell" style="padding: 16px;">
+  <a class="role-card tap-lg" href="boss-dashboard.html" style="margin-bottom:12px;">
+    <div class="row-title" data-i18n="activeOrders">当前订单</div>
+    <div class="row-sub" data-i18n="orderOverview">订单总览</div>
+  </a>
+  <a class="role-card tap-lg" href="boss-new-order.html" style="margin-bottom:12px;">
+    <div class="row-title" data-i18n="newOrderTitle">新建订单</div>
+    <div class="row-sub" data-i18n="publishOrder">发布到车间</div>
+  </a>
+  <a class="role-card tap-lg" href="customers.html" style="margin-bottom:12px;">
+    <div class="row-title" data-i18n="customerManagement">客户管理</div>
+    <div class="row-sub" data-i18n="manageCustomers">管理客户</div>
+  </a>
+  <a class="role-card tap-lg" href="boss-dashboard.html?archived=1">
+    <div class="row-title" data-i18n="archivedOrdersTitle">归档订单</div>
+    <div class="row-sub" data-i18n="viewArchivedOrders">查看归档订单</div>
+  </a>
+</div>
+
+<script src="js/api.js?v=20260520-customer-quick"></script>
+<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script>
+const pageAllowed = requireRolePage('boss');
+if (pageAllowed) injectBossNav('orders');
+</script>
+</body>
+</html>
