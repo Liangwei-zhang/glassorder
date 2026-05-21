@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup Batches</title>
-<link rel="stylesheet" href="shared.css?v=20260520-customer-quick">
+<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
 </head>
 <body>
 <div class="topbar">
@@ -14,32 +14,61 @@
 
 <div class="center-col boss-shell" style="padding:16px;">
   <div class="pickup-stats" id="stats"></div>
+  <div class="card pickup-search-card">
+    <label class="form-label" for="pickupSearch" id="pickupSearchLabel" data-i18n="pickupBatchSearchLabel">搜索取货记录</label>
+    <input class="form-input" id="pickupSearch" type="search" autocomplete="off" data-i18n-placeholder="pickupBatchSearchPlaceholder" placeholder="客户 / 批次号 / 签字人 / 电话">
+    <div class="row-sub" id="pickupSearchMeta" style="margin-top:8px;"></div>
+  </div>
   <div class="pickup-list-title">
-    <span data-i18n="pickupBatches">提货批次</span>
-    <span id="batchCount"></span>
+    <span id="listTitle" data-i18n="pickupBatches">提货批次</span>
+    <span id="listCount"></span>
   </div>
   <div id="list"></div>
 </div>
 
 <a class="fab" href="pickup-search.html" aria-label="new pickup" data-i18n-title="newPickupBatch">+</a>
 
-<script src="js/api.js?v=20260520-customer-quick"></script>
-<script src="js/i18n.js?v=20260520-customer-quick"></script>
+<script src="js/api.js?v=20260521-pickup-tabs"></script>
+<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 if (pageAllowed) injectBossNav('pickup');
 let batches = [];
 let readyOrders = [];
+let availablePieces = [];
+let currentView = 'ready';
+let pickupQuery = '';
 async function loadBatches() {
   document.getElementById('list').innerHTML = skeletonRows(4);
   document.getElementById('stats').innerHTML = skeletonRows(2);
-  const [data, ready] = await Promise.all([
+  const [data, ready, available] = await Promise.all([
     api('/api/pickups/batches'),
     api('/api/orders?status=ready_pickup&limit=100'),
+    api('/api/pickups/available/all'),
   ]);
   batches = data.batches || [];
   readyOrders = ready.orders || [];
+  availablePieces = available.pieces || [];
   render();
+}
+function pickupSearchFields(row) {
+  return normText([
+    row.order_number,
+    row.batch_number,
+    row.company,
+    row.project_name,
+    row.signer_name,
+    row.signer_phone,
+    row.customer_phone,
+    row.picked_at,
+    row.size,
+    row.type,
+    row.thickness,
+  ].filter(Boolean).join(' '));
+}
+function matchesPickupSearch(row) {
+  const q = normText(pickupQuery);
+  return !q || pickupSearchFields(row).includes(q);
 }
 function render() {
   const el = document.getElementById('list');
@@ -48,40 +77,134 @@ function render() {
   const unpickedPieces = readyOrders.reduce((sum, o) => sum + Number(o.unpicked_pieces || 0), 0);
   const activeItems = batches.reduce((sum, b) => sum + Number(b.active_items || 0), 0);
   const revertedItems = batches.reduce((sum, b) => sum + Number(b.reverted_items || 0), 0);
-  document.getElementById('batchCount').textContent = batches.length
-    ? tn('pickupBatchCountN', { n: batches.length })
-    : '';
   statsEl.innerHTML = `
-    <div class="pickup-stat-card warn">
+    <button class="pickup-stat-card warn ${currentView === 'ready' ? 'active' : ''}" type="button" data-view="ready">
       <div class="value">${readyOrderCount}</div>
       <div class="label">${esc(t('pickupReadyOrders'))}</div>
-    </div>
-    <div class="pickup-stat-card info">
+    </button>
+    <button class="pickup-stat-card info ${currentView === 'unpicked' ? 'active' : ''}" type="button" data-view="unpicked">
       <div class="value">${unpickedPieces}</div>
       <div class="label">${esc(t('unpickedPieces'))}</div>
-    </div>
-    <div class="pickup-stat-card">
+    </button>
+    <button class="pickup-stat-card ${currentView === 'batches' ? 'active' : ''}" type="button" data-view="batches">
       <div class="value">${batches.length}</div>
       <div class="label">${esc(t('pickupBatches'))}</div>
-    </div>
-    <div class="pickup-stat-card danger">
+    </button>
+    <button class="pickup-stat-card danger ${currentView === 'reverted' ? 'active' : ''}" type="button" data-view="reverted">
       <div class="value">${revertedItems}</div>
       <div class="label">${esc(t('revertedPieces'))}</div>
-    </div>`;
-  if (!batches.length) {
-    el.innerHTML = `<div class="empty-state"><div>${esc(t('noPickupBatches'))}</div><a class="btn btn-primary cta" href="pickup-search.html">${esc(t('newPickupBatch'))}</a></div>`;
+    </button>`;
+  statsEl.querySelectorAll('[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentView = btn.dataset.view;
+      render();
+    });
+  });
+  renderCurrentList();
+}
+function setSearchCopy(labelKey, placeholderKey) {
+  const label = document.getElementById('pickupSearchLabel');
+  const input = document.getElementById('pickupSearch');
+  label.dataset.i18n = labelKey;
+  label.textContent = t(labelKey);
+  input.dataset.i18nPlaceholder = placeholderKey;
+  input.placeholder = t(placeholderKey);
+}
+function renderCurrentList() {
+  const el = document.getElementById('list');
+  const title = document.getElementById('listTitle');
+  const count = document.getElementById('listCount');
+  const meta = document.getElementById('pickupSearchMeta');
+  const viewConfig = {
+    ready: ['pickupReadyOrders', 'pickupReadySearchLabel', 'pickupReadySearchPlaceholder'],
+    unpicked: ['unpickedPieces', 'pickupPieceSearchLabel', 'pickupPieceSearchPlaceholder'],
+    batches: ['pickupBatches', 'pickupBatchSearchLabel', 'pickupBatchSearchPlaceholder'],
+    reverted: ['revertedPieces', 'pickupRevertedSearchLabel', 'pickupRevertedSearchPlaceholder'],
+  }[currentView];
+  title.dataset.i18n = viewConfig[0];
+  title.textContent = t(viewConfig[0]);
+  setSearchCopy(viewConfig[1], viewConfig[2]);
+
+  if (currentView === 'ready') {
+    const rows = readyOrders.filter(matchesPickupSearch);
+    meta.textContent = readyOrders.length ? tn('pickupListSearchResultCount', { shown: rows.length, total: readyOrders.length }) : '';
+    count.textContent = rows.length ? tn('ordersCountN', { n: rows.length }) : '';
+    renderReadyOrders(rows);
     return;
   }
-  el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${batches.map(b => `
+  if (currentView === 'unpicked') {
+    const rows = availablePieces.filter(matchesPickupSearch);
+    meta.textContent = availablePieces.length ? tn('pickupPieceSearchResultCount', { shown: rows.length, total: availablePieces.length }) : '';
+    count.textContent = rows.length ? tn('piecesShortN', { n: rows.length }) : '';
+    renderUnpickedPieces(rows);
+    return;
+  }
+  if (currentView === 'reverted') {
+    const rows = batches.filter(b => Number(b.reverted_items || 0) > 0).filter(matchesPickupSearch);
+    const total = batches.filter(b => Number(b.reverted_items || 0) > 0).length;
+    meta.textContent = total ? tn('pickupBatchSearchResultCount', { shown: rows.length, total }) : '';
+    count.textContent = rows.length ? tn('pickupBatchCountN', { n: rows.length }) : '';
+    renderBatches(rows, t('noRevertedPickupBatches'));
+    return;
+  }
+  const rows = batches.filter(matchesPickupSearch);
+  meta.textContent = batches.length ? tn('pickupBatchSearchResultCount', { shown: rows.length, total: batches.length }) : '';
+  count.textContent = rows.length ? tn('pickupBatchCountN', { n: rows.length }) : '';
+  renderBatches(rows, t('noPickupBatches'));
+}
+function renderReadyOrders(rows) {
+  const el = document.getElementById('list');
+  if (!readyOrders.length) {
+    el.innerHTML = `<div class="empty-state"><div>${esc(t('noReadyPickupOrders'))}</div><a class="btn btn-primary cta" href="pickup-search.html">${esc(t('newPickupBatch'))}</a></div>`;
+    return;
+  }
+  if (!rows.length) return void (el.innerHTML = emptyState(t('pickupSearchNoResults')));
+  el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${rows.map(o => `
+    <a class="row" href="pickup-search.html?customer_id=${o.customer_id}">
+      <div style="flex:1;">
+        <div class="row-title">#${esc(o.order_number)} · ${esc(o.company)}</div>
+        <div class="row-sub">${esc(o.project_name || '')} · ${esc(tn('piecesShortN', { n: Number(o.unpicked_pieces || 0) }))} · ${esc(t('plan'))} ${esc(o.deadline || t('notSet'))}</div>
+      </div>
+      <span class="badge badge-pickup">${esc(t('statusReadyPickup'))}</span>
+    </a>`).join('')}</div>`;
+}
+function renderUnpickedPieces(rows) {
+  const el = document.getElementById('list');
+  if (!availablePieces.length) {
+    el.innerHTML = `<div class="empty-state"><div>${esc(t('noUnpickedPieces'))}</div><a class="btn btn-primary cta" href="pickup-search.html">${esc(t('newPickupBatch'))}</a></div>`;
+    return;
+  }
+  if (!rows.length) return void (el.innerHTML = emptyState(t('pickupSearchNoResults')));
+  el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${rows.map(p => `
+    <a class="row" href="pickup-search.html?customer_id=${p.customer_id}">
+      <div style="flex:1;">
+        <div class="row-title">${esc(p.company)} · #${esc(p.order_number)} · ${esc(tn('pieceN', { n: p.piece_no }))}</div>
+        <div class="row-sub">${esc(p.project_name || '')} · ${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}</div>
+      </div>
+      <span class="badge badge-pickup">${esc(t('unpickedPieces'))}</span>
+    </a>`).join('')}</div>`;
+}
+function renderBatches(rows, emptyText) {
+  const el = document.getElementById('list');
+  if (!batches.length) {
+    el.innerHTML = `<div class="empty-state"><div>${esc(emptyText)}</div><a class="btn btn-primary cta" href="pickup-search.html">${esc(t('newPickupBatch'))}</a></div>`;
+    return;
+  }
+  if (!rows.length) return void (el.innerHTML = emptyState(t('pickupSearchNoResults')));
+  el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${rows.map(b => `
     <a class="row" href="pickup-batch-detail.html?id=${b.id}">
       <div style="flex:1;">
         <div class="row-title">${esc(b.batch_number)} · ${esc(b.company)}</div>
-        <div class="row-sub">${esc(relativeTime(b.picked_at))} · ${esc(tn('piecesShortN', { n: Number(b.active_items || 0) }))}${Number(b.reverted_items || 0) ? ' · ' + esc(tn('revertedPiecesN', { n: Number(b.reverted_items || 0) })) : ''}</div>
+        <div class="row-sub">${esc(relativeTime(b.picked_at))} · ${esc(b.signer_name || '')}${b.signer_phone ? ' · ' + esc(b.signer_phone) : ''} · ${esc(tn('piecesShortN', { n: Number(b.active_items || 0) }))}${Number(b.reverted_items || 0) ? ' · ' + esc(tn('revertedPiecesN', { n: Number(b.reverted_items || 0) })) : ''}</div>
       </div>
       <span class="badge badge-pickup">${esc(t('pickupComplete'))}</span>
     </a>`).join('')}</div>`;
 }
 function onLangChange() { render(); }
+document.getElementById('pickupSearch').addEventListener('input', (e) => {
+  pickupQuery = e.target.value.trim();
+  renderCurrentList();
+});
 if (pageAllowed) {
   loadBatches().catch(err => {
     document.getElementById('list').innerHTML = errorState(err.message, t('retry'), loadBatches);

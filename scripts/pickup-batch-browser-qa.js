@@ -102,8 +102,34 @@ async function draw(page) {
     await page.locator('.modal-backdrop.open [data-role="ok"]').click();
     await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
     await page.waitForSelector('a[href^="/uploads/slips/"]');
+    const detailUrl = page.url();
     const detailText = await page.locator('#body').textContent();
     if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '')) throw new Error('batch detail did not render pieces');
+    await page.goto(BASE + '/pickup-batches.html', { waitUntil: 'networkidle' });
+    await page.waitForSelector('#pickupSearch', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelectorAll('.pickup-stat-card').length === 4, null, { timeout: 10000 });
+    const initialTitle = await page.locator('#listTitle').textContent();
+    if (!/可取订单|Ready Orders/.test(initialTitle || '')) throw new Error(`pickup default view should be ready orders: ${initialTitle}`);
+
+    await page.locator('.pickup-stat-card[data-view="unpicked"]').click();
+    await page.waitForFunction(() => /未取片|Unpicked/.test(document.querySelector('#listTitle')?.textContent || ''), null, { timeout: 10000 });
+    const unpickedText = await page.locator('#list').textContent();
+    if (!unpickedText.includes(customer.company)) throw new Error('unpicked tab should include target customer');
+
+    await page.locator('.pickup-stat-card[data-view="batches"]').click();
+    await page.waitForFunction(() => /提货批次|Pickup Batches/.test(document.querySelector('#listTitle')?.textContent || ''), null, { timeout: 10000 });
+    await page.fill('#pickupSearch', customer.company);
+    await page.waitForFunction((company) => {
+      const rows = [...document.querySelectorAll('#list .row')];
+      return rows.length === 1 && rows[0].textContent.includes(company);
+    }, customer.company, { timeout: 10000 });
+    const searchMeta = await page.locator('#pickupSearchMeta').textContent();
+    if (!/显示 1 \//.test(searchMeta || '') && !/Showing 1 \//.test(searchMeta || '')) {
+      throw new Error(`pickup batch search meta invalid: ${searchMeta}`);
+    }
+    await page.fill('#pickupSearch', 'no-such-pickup-batch-' + Date.now());
+    await page.waitForFunction(() => /没有匹配内容|No matching records/.test(document.querySelector('#list')?.textContent || ''), null, { timeout: 10000 });
+    await page.goto(detailUrl, { waitUntil: 'networkidle' });
     page.once('dialog', async dialog => {
       await dialog.accept('browser qa revert');
     });
@@ -113,6 +139,13 @@ async function draw(page) {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     if (!/已回退|Reverted/.test(after || '')) throw new Error('reverted marker missing');
     if (overflow > 2) throw new Error(`horizontal overflow ${overflow}px`);
+    await page.goto(BASE + '/pickup-batches.html', { waitUntil: 'networkidle' });
+    await page.locator('.pickup-stat-card[data-view="reverted"]').click();
+    await page.fill('#pickupSearch', customer.company);
+    await page.waitForFunction((company) => {
+      const text = document.querySelector('#list')?.textContent || '';
+      return text.includes(company) && /已回退|Reverted/.test(text);
+    }, customer.company, { timeout: 10000 });
     if (errors.length) throw new Error(errors.join(' | '));
     console.log(`PICKUP BATCH BROWSER QA PASS customer=${customer.id} url=${page.url()}`);
   } finally {

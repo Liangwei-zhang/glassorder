@@ -1501,3 +1501,122 @@ bash scripts/build-i18n.sh
   - `node scripts/navigation-browser-qa.js` ✅
   - `node scripts/pickup-batch-browser-qa.js` ✅
   - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+
+## Phase 20：前端动效与过场体验优化（2026-05-21）
+
+### 需求
+前端加入过场动画和能提升使用流畅感的动效。动效必须服务操作反馈，不能拖慢工人点片、老板查单和取货流程。
+
+### 任务
+- 增加全局轻量页面进入/离开过场，用于同源 HTML 页面切换。
+- 增加列表行、统计卡、客户卡、取货卡、工人待做卡的短进入动效。
+- 增强底部 5 菜单、FAB、按钮、客户搜索结果、菜单弹层的按压/激活反馈。
+- `withBusy()` 操作完成后给按钮一次短反馈，不改变原有 toast 和业务逻辑。
+- 保留并验证 `prefers-reduced-motion: reduce`，系统关闭动画时不强行动效。
+- 更新 PWA、CSS、JS 版本，避免手机端继续使用旧缓存。
+
+### 验收标准
+- 页面切换有轻量过场，底部导航和 FAB 不遮挡、不换行。
+- 列表/卡片进入更顺滑，但工人片子操作仍不触发整单重拉或长动画。
+- 低动效系统设置下禁用主要动画。
+- 390px/412px/320px 移动端无横向溢出；现有业务 QA 全部通过。
+
+### 验证命令
+```bash
+node scripts/motion-browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/perf-check-worker.js
+node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)
+bash scripts/build-i18n.sh
+```
+
+### Phase 20 验收结果
+- 已在 `frontend/js/api.js` 增加全局同源页面切换过场：页面加载后加 `motion-ready`，点击同源 HTML 链接时短暂加 `page-leaving` 再跳转；PDF、上传件、外链、下载链接不拦截 ✅
+- `withBusy()` 成功完成后增加短反馈环，不改变原有禁用、spinner、toast 和错误处理逻辑 ✅
+- `frontend/shared.css` 增加页面进入、顶部栏、底部导航、FAB、列表行、统计卡、客户搜索结果、工人待做卡等轻量动效，持续时间控制在 120–320ms 范围 ✅
+- 保留 `prefers-reduced-motion: reduce`，动效专项 QA 确认低动效模式不会加 `motion-ready`，不会强制页面退出动画 ✅
+- PWA 版本提升到 `v19-2026-05-21-motion-polish`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-motion-polish`，缓存清理 key 同步更新 ✅
+- 新增 `scripts/motion-browser-qa.js`，覆盖 `412×915`、`390×844`、`320×740` 和 reduced-motion 场景 ✅
+- 验证命令全部通过：
+  - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+  - `bash scripts/build-i18n.sh` ✅
+  - `bash scripts/status.sh` ✅，服务健康在 `:8781`
+  - `node scripts/motion-browser-qa.js` ✅
+  - `node scripts/navigation-browser-qa.js` ✅
+  - `node scripts/page-matrix-qa.js` ✅
+  - `node scripts/perf-check-worker.js` ✅，单片操作只发 `POST /api/pieces/:id/advance`，约 `466.7ms`
+  - `node scripts/pickup-batch-browser-qa.js` ✅
+  - `node scripts/customer-search-qa.js` ✅
+  - `./scripts/smoke.sh` ✅
+
+### P20 补充优化：过场等待 GIF（2026-05-21）
+- 新增本地等待动图资源 `frontend/icons/loading.gif`，不依赖外链 ✅
+- 页面同源跳转过场中加入居中等待 GIF 浮层；PDF、上传件、外链、下载链接仍不拦截 ✅
+- Service Worker 预缓存 `./icons/loading.gif`，PWA/弱网场景可用 ✅
+- 资源版本提升到 `v20-2026-05-21-transition-gif`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-transition-gif` ✅
+- `scripts/motion-browser-qa.js` 增加过场 GIF 检查：点击底部菜单时必须出现 `.page-transition-loader img[src="/icons/loading.gif"]`；低动效模式不显示过场层 ✅
+
+### P20 补充优化 2：高级动效质感升级（2026-05-21）
+- 增强页面过场为玻璃质感浮层和更明显的进入/退出动效，但保持同源页面跳转总等待短于 300ms。
+- 增加按钮/列表/FAB/底部导航的点击水波与微浮动反馈。
+- 增加统计数字滚动、进度条流光、状态徽章细节动效，提升工作台质感。
+- 动效集中在公共 `shared.css` / `api.js`，不改业务流程和权限。
+- 继续保留 `prefers-reduced-motion: reduce`，低动效模式不强制显示高级动效。
+- 资源版本提升到 `v21-2026-05-21-premium-motion`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-premium-motion`。
+- 验证命令：
+```bash
+node scripts/motion-browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/perf-check-worker.js
+node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)
+```
+- 验收结果：
+  - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+  - `node scripts/motion-browser-qa.js` ✅
+  - `node scripts/navigation-browser-qa.js` ✅
+  - `node scripts/page-matrix-qa.js` ✅
+  - `node scripts/perf-check-worker.js` ✅，单片操作仍只发 `POST /api/pieces/:id/advance`
+  - `node scripts/customer-search-qa.js` ✅
+  - `node scripts/pickup-batch-browser-qa.js` ✅
+  - `bash scripts/build-i18n.sh` ✅
+  - `./scripts/smoke.sh` ✅
+
+### P20 补充修复：取货菜单批次模糊查询（2026-05-21）
+- `pickup-batches.html` 在统计卡下方新增“搜索取货记录”输入框。
+- 支持按客户名、批次号、签字人、电话、取货时间做本地模糊过滤。
+- 批次列表副标题增加签字人和电话，方便老板核对取货记录。
+- 搜索结果显示 `显示 {shown} / {total} 个批次`；无匹配时显示统一空状态。
+- 资源版本提升到 `v22-2026-05-21-pickup-batch-search`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-pickup-batch-search`。
+- `scripts/pickup-batch-browser-qa.js` 已覆盖取货批次搜索命中、无结果、返回详情后的回退纠错流程。
+- 验证通过：
+  - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+  - `bash scripts/build-i18n.sh` ✅
+  - `node scripts/pickup-batch-browser-qa.js` ✅
+  - `node scripts/page-matrix-qa.js` ✅
+  - `node scripts/navigation-browser-qa.js` ✅
+  - `node scripts/motion-browser-qa.js` ✅
+  - `node scripts/perf-check-worker.js` ✅
+
+### P20 补充修复 2：取货首页 4 卡片可点击切换（2026-05-21）
+- 修复取货菜单只展示“取货完成/提货批次”的问题。
+- 取货首页 4 张统计卡改为可点击视图：
+  - 可取订单：显示当前可取订单，点击行进入对应客户取货。
+  - 未取片：跨客户显示所有已完成但未取的片，点击行进入对应客户取货。
+  - 提货批次：显示已办理的提货批次。
+  - 撤销片：显示有回退/纠错的提货批次。
+- 搜索框随当前视图切换提示文案，并对当前列表做模糊查询。
+- 新增 `GET /api/pickups/available/all`，供老板查看跨客户未取片，不开放给工人。
+- `pickup-search.html` 支持 `?customer_id=`，从可取订单/未取片点击后自动选中客户。
+- 资源版本提升到 `v23-2026-05-21-pickup-tabs`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-pickup-tabs`。
+- `scripts/pickup-batch-browser-qa.js` 已覆盖默认可取订单、未取片、提货批次、撤销片四个视图。
+- 验证通过：
+  - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+  - `bash scripts/build-i18n.sh` ✅
+  - `node scripts/pickup-batch-browser-qa.js` ✅
+  - `node scripts/page-matrix-qa.js` ✅
+  - `node scripts/navigation-browser-qa.js` ✅
+  - `node scripts/motion-browser-qa.js` ✅
+  - `./scripts/smoke.sh` ✅
+  - `node scripts/perf-check-worker.js` ✅

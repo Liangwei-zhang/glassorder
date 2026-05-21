@@ -137,6 +137,32 @@ router.get('/available', requireRole('boss'), (req, res) => {
   res.json({ customer, orders: groupAvailable(rows), pieces: rows, total_pieces: rows.length });
 });
 
+router.get('/available/all', requireRole('boss'), (req, res) => {
+  const rows = db.prepare(`
+    SELECT
+      p.*,
+      o.order_number,
+      o.project_name,
+      o.priority,
+      o.deadline,
+      c.id AS customer_id,
+      c.company,
+      c.contact_name,
+      c.phone AS customer_phone,
+      c.email AS customer_email
+    FROM pieces p
+    JOIN orders o ON o.id = p.order_id
+    JOIN customers c ON c.id = o.customer_id
+    WHERE o.archived_at IS NULL
+      AND p.stage = 'finished'
+      AND p.hold = 0
+      AND p.picked_up_at IS NULL
+    ORDER BY c.company, o.deadline IS NULL, o.deadline, o.created_at, o.id, p.piece_no
+    LIMIT 500
+  `).all();
+  res.json({ pieces: rows, total_pieces: rows.length });
+});
+
 router.get('/batches', requireRole('boss'), (req, res) => {
   const customerId = safeInt(req.query.customer_id);
   const where = [];

@@ -6,7 +6,7 @@
  * - Uploaded order drawings (/uploads/orders/): cache-first (immutable per upload path).
  * - API calls (/api/*) and pickup PDFs/signatures: network-only, never cached.
  */
-const VERSION = 'v18-2026-05-20-customer-quick';
+const VERSION = 'v23-2026-05-21-pickup-tabs';
 const STATIC_CACHE = `glassorder-static-${VERSION}`;
 const ASSET_CACHE = `glassorder-assets-${VERSION}`;
 const PRECACHE_HTML = [
@@ -32,6 +32,7 @@ const PRECACHE_ASSET = [
   './js/api.js',
   './js/i18n.js',
   './manifest.json',
+  './icons/loading.gif',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',

@@ -2,6 +2,133 @@ const API_BASE = '';
 const TOKEN_KEY = 'glassorder_token';
 const USER_KEY = 'glassorder_user';
 
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function flashMotion(el, className, ttl = 420) {
+  if (!el || prefersReducedMotion()) return;
+  el.classList.remove(className);
+  // Force a style flush so repeated successful actions replay the feedback.
+  void el.offsetWidth;
+  el.classList.add(className);
+  window.setTimeout(() => {
+    if (el && el.classList) el.classList.remove(className);
+  }, ttl);
+}
+
+function animateNumber(el, duration = 680) {
+  if (!el || prefersReducedMotion()) return;
+  const raw = String(el.textContent || '').replace(/,/g, '').trim();
+  if (!/^-?\d+(\.\d+)?$/.test(raw)) return;
+  const target = Number(raw);
+  if (!Number.isFinite(target)) return;
+  const decimals = raw.includes('.') ? raw.split('.')[1].length : 0;
+  const start = target > 12 ? Math.max(0, Math.floor(target * 0.72)) : 0;
+  const startTime = performance.now();
+  function tick(now) {
+    const p = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - p, 3);
+    const value = start + (target - start) * eased;
+    el.textContent = decimals ? value.toFixed(decimals) : String(Math.round(value));
+    if (p < 1) requestAnimationFrame(tick);
+    else el.textContent = raw;
+  }
+  requestAnimationFrame(tick);
+}
+
+function animateNumbers(root = document) {
+  if (prefersReducedMotion()) return;
+  root.querySelectorAll('.num-big, .pickup-stat-card .value, .worker-hero-num, .worker-pending-pill .count').forEach((el) => {
+    if (el.dataset.countAnimated === el.textContent) return;
+    el.dataset.countAnimated = el.textContent;
+    animateNumber(el);
+  });
+}
+
+function preloadTransitionGif() {
+  if (typeof Image === 'undefined') return;
+  const img = new Image();
+  img.src = '/icons/loading.gif';
+}
+
+function showTransitionLoader() {
+  if (document.querySelector('.page-transition-loader')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'page-transition-loader';
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.innerHTML = '<div class="page-transition-loader-box"><img src="/icons/loading.gif" alt=""></div>';
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('open'));
+}
+
+function initPageMotion() {
+  if (typeof document === 'undefined' || prefersReducedMotion()) return;
+  function markReady() {
+    if (!document.body) return;
+    document.body.classList.add('motion-ready', 'luxury-motion');
+    preloadTransitionGif();
+    animateNumbers();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', markReady, { once: true });
+  } else {
+    requestAnimationFrame(markReady);
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+    if (!anchor || anchor.target || anchor.hasAttribute('download') || anchor.closest('[data-no-transition]')) return;
+    let url;
+    try { url = new URL(anchor.href, location.href); } catch (err) { return; }
+    if (url.origin !== location.origin) return;
+    if (url.href === location.href || url.hash && url.pathname === location.pathname && url.search === location.search) return;
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/uploads/')) return;
+    const file = url.pathname.split('/').pop() || '';
+    const ext = file.includes('.') ? file.slice(file.lastIndexOf('.')).toLowerCase() : '';
+    if (ext && ext !== '.html') return;
+
+    event.preventDefault();
+    if (document.body.classList.contains('page-leaving')) return;
+    document.body.classList.add('page-leaving');
+    showTransitionLoader();
+    window.setTimeout(() => { location.href = url.href; }, 240);
+  }, true);
+
+  document.addEventListener('pointerdown', (event) => {
+    const target = event.target && event.target.closest
+      ? event.target.closest('.btn, .row, .bottom-nav a, .fab, .customer-rank-pill, .customer-picker-option, .stage-tab, .stage-btn, .menu-trigger, .add-trigger')
+      : null;
+    if (!target || target.disabled || target.dataset.ripple === 'off') return;
+    const rect = target.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const ripple = document.createElement('span');
+    ripple.className = 'touch-ripple';
+    const size = Math.max(rect.width, rect.height) * 1.45;
+    ripple.style.width = ripple.style.height = `${size}px`;
+    ripple.style.left = `${event.clientX - rect.left - size / 2}px`;
+    ripple.style.top = `${event.clientY - rect.top - size / 2}px`;
+    target.appendChild(ripple);
+    window.setTimeout(() => ripple.remove(), 620);
+  }, { passive: true });
+
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      record.addedNodes.forEach((node) => {
+        if (node.nodeType === 1) animateNumbers(node);
+      });
+    }
+  });
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+}
+
+initPageMotion();
+
 // PWA: register service worker + inject manifest/iOS meta tags once per page load.
 (function injectPwaTags() {
   if (typeof document === 'undefined') return;
@@ -47,7 +174,7 @@ const USER_KEY = 'glassorder_user';
 if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   // One-shot cache nuke for this release — guarantees stale 'stale-while-revalidate'
   // caches from earlier SW versions cannot serve outdated HTML.
-  const NUKE_KEY = '__sw_nuke_2026_05_20_customer_quick__';
+  const NUKE_KEY = '__sw_nuke_2026_05_21_pickup_tabs__';
   if (!localStorage.getItem(NUKE_KEY)) {
     localStorage.setItem(NUKE_KEY, '1');
     if (window.caches && caches.keys) {
@@ -599,16 +726,22 @@ function withBusy(btn, fn, restoreLabel) {
   if (!btn) return fn();
   if (btn.dataset.busy === '1') return Promise.resolve();
   const original = restoreLabel || btn.textContent;
+  let succeeded = false;
   btn.dataset.busy = '1';
   btn.setAttribute('aria-busy', 'true');
   btn.disabled = true;
   return Promise.resolve()
     .then(() => fn())
+    .then((result) => {
+      succeeded = true;
+      return result;
+    })
     .finally(() => {
       btn.removeAttribute('aria-busy');
       btn.disabled = false;
       btn.dataset.busy = '';
       btn.textContent = original;
+      if (succeeded) flashMotion(btn, 'btn-done');
     });
 }
 
