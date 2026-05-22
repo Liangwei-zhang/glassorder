@@ -3,6 +3,9 @@ const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 
 const dbPath = process.env.DB_PATH || path.join(__dirname, 'glass.db');
+const uploadsBase = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(__dirname, 'uploads');
 const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
@@ -123,6 +126,17 @@ function migrateDb() {
         }
       },
     },
+    {
+      name: 'phase31_pickup_batch_counters',
+      run() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS pickup_batch_counters (
+            prefix TEXT PRIMARY KEY,
+            next_seq INTEGER NOT NULL
+          )
+        `);
+      },
+    },
   ];
 
   const applied = db.prepare('SELECT name FROM schema_migrations').all()
@@ -226,6 +240,11 @@ function initDb() {
       picked_at TEXT NOT NULL DEFAULT (datetime('now')),
       picked_by INTEGER REFERENCES users(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pickup_batch_counters (
+      prefix TEXT PRIMARY KEY,
+      next_seq INTEGER NOT NULL
+    );
   `);
 
   const insertUser = db.prepare(`
@@ -252,11 +271,36 @@ function initDb() {
       role: 'worker',
     });
   }
+  if (process.env.SEED_DEMO_USERS === '1') {
+    if (!findUser.get('bossdemo', 'bossdemo')) {
+      insertUser.run({
+        phone: 'bossdemo',
+        email: 'bossdemo@example.test',
+        password_hash: bcrypt.hashSync('boss123456', 10),
+        name: 'Boss Demo',
+        role: 'boss',
+      });
+    }
+    if (!findUser.get('workerdemo', 'workerdemo')) {
+      insertUser.run({
+        phone: 'workerdemo',
+        email: 'workerdemo@example.test',
+        password_hash: bcrypt.hashSync('worker123456', 10),
+        name: 'Worker Demo',
+        role: 'worker',
+      });
+    }
+  }
 
   db.prepare('INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)').run('initial_schema');
   migrateDb();
 }
 
 initDb();
+
+db.runtime = {
+  dbPath,
+  uploadsBase,
+};
 
 module.exports = db;

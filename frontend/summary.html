@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Summary</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -12,12 +12,12 @@
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
-<div class="center-col boss-shell" style="padding:16px;">
+<div class="content-shell boss-shell">
   <div id="body"></div>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 if (pageAllowed) injectBossNav('summary');
@@ -30,32 +30,34 @@ async function loadSummary() {
 }
 
 function stat(v) { return Number(v || 0); }
-function metric(label, value) {
-  return `<div class="stat-tile"><div class="num-big">${stat(value)}</div><div class="num-label">${esc(label)}</div></div>`;
-}
 
 function render() {
   if (!summary) return;
   const tts = summary.totals || {};
   document.getElementById('body').innerHTML = `
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-bottom:12px;">
-      ${metric(t('ordersCount'), tts.orders)}
-      ${metric(t('totalPieces'), tts.pieces)}
-      ${metric(t('pickedPieces'), tts.picked_pieces)}
-      ${metric(t('finishedPieces'), tts.finished_pieces)}
-      ${metric(t('holdPieces'), tts.hold_pieces)}
-      ${metric(t('reworkPieces'), tts.rework_pieces)}
-    </div>
-    <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
-      <div style="padding:12px 14px; font-weight:700;" data-i18n="summaryByStatus">${esc(t('summaryByStatus'))}</div>
+    ${renderStatCells([
+      { value: stat(tts.orders), label: t('ordersCount') },
+      { value: stat(tts.pieces), label: t('totalPieces') },
+      { value: stat(tts.picked_pieces), label: t('pickedPieces'), tone: 'info' },
+      { value: stat(tts.finished_pieces), label: t('finishedPieces') },
+      { value: stat(tts.hold_pieces), label: t('holdPieces'), tone: stat(tts.hold_pieces) ? 'warn' : '' },
+      { value: stat(tts.rework_pieces), label: t('reworkPieces'), tone: stat(tts.rework_pieces) ? 'danger' : '' },
+    ], { className: 'metrics-grid summary-stats-grid' })}
+    ${renderPanel({
+      title: t('summaryByStatus'),
+      body: `
       ${(summary.by_status || []).map(r => `
         <div class="row">
           <div style="flex:1;"><div class="row-title">${esc(statusLabel(r.status))}</div><div class="row-sub">${esc(tn('piecesShortN', { n: stat(r.pieces) }))}</div></div>
           <div class="num" style="font-weight:800;">${stat(r.orders)}</div>
         </div>`).join('')}
-    </div>
-    <div class="card" style="padding:0; overflow:hidden;">
-      <div style="padding:12px 14px; font-weight:700;" data-i18n="summaryByCustomer">${esc(t('summaryByCustomer'))}</div>
+    `,
+      className: 'summary-panel',
+    })}
+    ${renderPanel({
+      title: t('summaryByCustomer'),
+      meta: tn('customerSearchResultCount', { shown: (summary.by_customer || []).length, total: (summary.by_customer || []).length }),
+      body: `
       ${(summary.by_customer || []).map(c => `
         <a class="row" href="summary-customer.html?id=${c.customer_id}">
           <div style="flex:1;">
@@ -64,7 +66,10 @@ function render() {
           </div>
           <div style="color:var(--text-3); font-size:20px;">›</div>
         </a>`).join('')}
-    </div>`;
+    `,
+      className: 'summary-panel',
+    })}`;
+  scheduleMotion(document.getElementById('body'));
 }
 
 function statusLabel(status) {

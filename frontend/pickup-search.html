@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -13,13 +13,15 @@
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
-<div class="center-col" style="padding:16px 16px 110px;">
-  <div class="card" style="margin-bottom:12px;">
+<div class="content-shell action-space">
+  <div class="pickup-stepper" id="pickupStepper"></div>
+  <div class="card flow-card">
     <label class="form-label" data-i18n="selectCustomer">选择客户</label>
     <div id="customerPicker"></div>
   </div>
   <div id="available"></div>
-  <div class="card" style="margin-top:12px;">
+  <div class="card signature-card" id="signatureCard" style="display:none;">
+    <div class="pickup-signature-intro" id="signatureIntro"></div>
     <label class="form-label" data-i18n="signerName">取货人姓名</label>
     <input class="form-input" id="name" data-i18n-placeholder="signerNamePh" placeholder="如: 张师傅">
     <label class="form-label" style="margin-top:12px;" data-i18n="contactPhone">联系电话</label>
@@ -32,32 +34,51 @@
 
 <div class="action-bar">
   <a class="btn btn-ghost back" href="pickup-batches.html" data-i18n="back">返回</a>
-  <button class="btn btn-success" id="submitBtn" onclick="submitBatch(event)" data-i18n="pickupConfirmBtn">确认取货</button>
+  <button class="btn btn-success" id="submitBtn" onclick="submitBatch(event)">
+    <span id="selectedSummary" data-i18n="pickupConfirmBtn">确认取货</span>
+  </button>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const allowed = requireRolePage('boss');
-const initialCustomerId = new URLSearchParams(location.search).get('customer_id');
+const params = new URLSearchParams(location.search);
+const initialCustomerId = params.get('customer_id');
+const initialOrderId = params.get('order_id');
 let customers = [];
 let grouped = [];
 let selected = new Set();
 let signatureEmpty = true;
 let customerPicker = null;
+let pendingInitialOrder = null;
+let orderFilterId = initialOrderId || '';
+let lastHadPieces = false;
+let lastCustomerId = '';
 
 async function loadCustomers() {
-  const data = await api('/api/customers');
-  customers = data.customers;
+  const [customerData, orderData] = await Promise.all([
+    api('/api/customers'),
+    initialOrderId ? api('/api/orders/' + encodeURIComponent(initialOrderId)) : Promise.resolve(null),
+  ]);
+  pendingInitialOrder = orderData && orderData.order ? orderData.order : null;
+  const targetCustomerId = pendingInitialOrder ? pendingInitialOrder.customer_id : initialCustomerId;
+  const backHref = pendingInitialOrder ? `boss-order-detail.html?id=${pendingInitialOrder.id}` : 'pickup-batches.html';
+  document.querySelectorAll('.back-btn, .action-bar .back').forEach((el) => { el.href = backHref; });
+  customers = customerData.customers;
   customerPicker.setCustomers(customers);
-  if (initialCustomerId && customers.some(c => String(c.id) === String(initialCustomerId))) customerPicker.select(initialCustomerId);
+  if (targetCustomerId && customers.some(c => String(c.id) === String(targetCustomerId))) customerPicker.select(targetCustomerId);
   else if (customers.length) customerPicker.select(customers[0].id);
   else document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
 }
 
 async function loadAvailable() {
   selected.clear();
+  signatureEmpty = true;
+  clearSig();
+  updatePickupFlow();
   const id = customerPicker ? customerPicker.getValue() : '';
+  lastCustomerId = String(id || '');
   if (!id) {
     document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
     return;
@@ -73,9 +94,19 @@ function renderAvailable() {
     el.innerHTML = emptyState(t('pickupEmpty'));
     return;
   }
-  el.innerHTML = grouped.map(order => `
-    <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
-      <div style="padding:12px 14px; background:var(--surface-2);">
+  const initialOrderIdNum = Number(orderFilterId || 0);
+  const filteredGroups = initialOrderIdNum ? grouped.filter(order => Number(order.order_id) === initialOrderIdNum) : grouped;
+  if (initialOrderIdNum && !filteredGroups.length) {
+    el.innerHTML = errorState(t('pickupOrderUnavailable'), t('viewCustomerAllPickupPieces'), () => {
+      orderFilterId = '';
+      history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(customerPicker.getValue()));
+      renderAvailable();
+    });
+    return;
+  }
+  el.innerHTML = filteredGroups.map(order => `
+    <div class="card pickup-order-panel flow-card">
+      <div class="pickup-order-head">
         <div class="row-title">#${esc(order.order_number)}</div>
         <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: order.pieces.length }))}</div>
       </div>
@@ -88,11 +119,50 @@ function renderAvailable() {
           </div>
         </label>`).join('')}
     </div>`).join('');
+  updatePickupFlow();
 }
 
 function togglePiece(id, on) {
   if (on) selected.add(Number(id));
   else selected.delete(Number(id));
+  updatePickupFlow();
+  if (selected.size > 0 && !lastHadPieces) {
+    lastHadPieces = true;
+    requestAnimationFrame(() => {
+      const target = document.getElementById('signatureCard');
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  } else if (!selected.size) {
+    lastHadPieces = false;
+  }
+}
+
+function updatePickupFlow() {
+  const hasCustomer = Boolean(customerPicker && customerPicker.getValue());
+  const hasPieces = selected.size > 0;
+  const steps = [
+    { number: 1, label: t('pickupStepCustomer'), done: hasCustomer },
+    { number: 2, label: t('pickupStepPieces'), done: hasPieces },
+    { number: 3, label: t('pickupStepSign'), done: hasPieces && !signatureEmpty },
+  ];
+  steps.forEach((step, index) => {
+    step.active = !step.done && ((index === 0 && !hasCustomer) || (index === 1 && hasCustomer && !hasPieces) || (index === 2 && hasPieces));
+  });
+  const note = selected.size ? tn('pickupSelectedHintN', { n: selected.size }) : '';
+  const stepper = document.getElementById('pickupStepper');
+  stepper.classList.toggle('with-note', selected.size > 0);
+  stepper.innerHTML = renderPickupSteps(steps, note);
+  document.getElementById('signatureCard').style.display = hasPieces ? '' : 'none';
+  const intro = document.getElementById('signatureIntro');
+  if (intro) {
+    intro.textContent = hasPieces
+      ? tn('pickupSelectedConfirmN', { n: selected.size })
+      : '';
+  }
+  const summary = document.getElementById('selectedSummary');
+  if (summary) {
+    summary.textContent = selected.size ? tn('pickupSelectedConfirmN', { n: selected.size }) : t('pickupConfirmBtn');
+  }
 }
 
 const canvas = document.getElementById('sig');
@@ -126,7 +196,7 @@ function move(e) {
   if (!drawing) return;
   const p = pos(e);
   ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-  last = p; signatureEmpty = false; e.preventDefault();
+  last = p; signatureEmpty = false; updatePickupFlow(); e.preventDefault();
 }
 function end(e) {
   drawing = false;
@@ -135,7 +205,7 @@ function end(e) {
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
   }
 }
-function clearSig() { ctx.clearRect(0, 0, canvas.width, canvas.height); signatureEmpty = true; }
+function clearSig() { ctx.clearRect(0, 0, canvas.width, canvas.height); signatureEmpty = true; updatePickupFlow(); }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 canvas.addEventListener('pointerdown', start);
@@ -178,17 +248,29 @@ async function submitBatch(ev) {
   });
 }
 
-function onLangChange() { renderAvailable(); }
+function onLangChange() { renderAvailable(); updatePickupFlow(); }
 if (allowed) {
   customerPicker = initCustomerPicker({
     root: '#customerPicker',
     customers: [],
     placeholder: t('customerSearchPlaceholder'),
-    onSelect: () => loadAvailable().catch(e => toast(e.message, { type:'danger' })),
+    onSelect: (customer) => {
+      if (String(customer.id) !== String(lastCustomerId)) {
+        document.getElementById('name').value = '';
+        document.getElementById('phone').value = '';
+      }
+      if (pendingInitialOrder && String(customer.id) !== String(pendingInitialOrder.customer_id)) {
+        orderFilterId = '';
+        history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(customer.id));
+        document.querySelectorAll('.back-btn, .action-bar .back').forEach((el) => { el.href = 'pickup-batches.html'; });
+      }
+      loadAvailable().catch(e => toast(e.message, { type:'danger' }));
+    },
   });
   loadCustomers().catch(err => {
     document.getElementById('available').innerHTML = errorState(err.message, t('retry'), () => loadCustomers());
   });
+  updatePickupFlow();
 }
 </script>
 </body>

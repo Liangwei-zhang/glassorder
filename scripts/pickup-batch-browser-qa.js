@@ -94,22 +94,44 @@ async function draw(page) {
     const checks = await page.locator('[data-piece]').count();
     if (checks < 16) throw new Error(`expected at least 16 available pieces, got ${checks}`);
     await page.locator('[data-piece]').nth(0).check();
+    await page.waitForFunction(() => /已选 1 片|1 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
     await page.locator('[data-piece]').nth(8).check();
+    await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
     await page.fill('#name', 'Browser Pickup Signer');
     await draw(page);
     await page.click('#submitBtn');
     await page.waitForSelector('.modal-backdrop.open');
     await page.locator('.modal-backdrop.open [data-role="ok"]').click();
     await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
-    await page.waitForSelector('a[href^="/uploads/slips/"]');
+    await page.waitForFunction(() => (
+      [...document.querySelectorAll('button')].some((btn) => /下载|Download/.test(btn.textContent || ''))
+    ), null, { timeout: 10000 });
     const detailUrl = page.url();
     const detailText = await page.locator('#body').textContent();
-    if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '')) throw new Error('batch detail did not render pieces');
+    if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '') || !/订单数|Orders/.test(detailText || '')) throw new Error('batch detail did not render pieces/summary');
     await page.goto(BASE + '/pickup-batches.html', { waitUntil: 'networkidle' });
     await page.waitForSelector('#pickupSearch', { timeout: 10000 });
     await page.waitForFunction(() => document.querySelectorAll('.pickup-stat-card').length === 4, null, { timeout: 10000 });
     const initialTitle = await page.locator('#listTitle').textContent();
     if (!/可取订单|Ready Orders/.test(initialTitle || '')) throw new Error(`pickup default view should be ready orders: ${initialTitle}`);
+    const activeCardStyle = await page.locator('.pickup-stat-card.active').evaluate((el) => {
+      const style = getComputedStyle(el);
+      const after = getComputedStyle(el, '::after');
+      return {
+        borderColor: style.borderTopColor,
+        borderWidth: style.borderTopWidth,
+        boxShadow: style.boxShadow,
+        bgImage: style.backgroundImage,
+        afterContent: after.content,
+      };
+    });
+    if (activeCardStyle.borderWidth !== '1px'
+      || !/rgb\(24,\s*24,\s*27\)/.test(activeCardStyle.borderColor)
+      || !/rgba\(24,\s*24,\s*27,\s*0\.08\)/.test(activeCardStyle.boxShadow)
+      || activeCardStyle.bgImage !== 'none'
+      || activeCardStyle.afterContent !== 'none') {
+      throw new Error(`pickup active card style diverges from order dashboard: ${JSON.stringify(activeCardStyle)}`);
+    }
 
     await page.locator('.pickup-stat-card[data-view="unpicked"]').click();
     await page.waitForFunction(() => /未取片|Unpicked/.test(document.querySelector('#listTitle')?.textContent || ''), null, { timeout: 10000 });
@@ -130,11 +152,18 @@ async function draw(page) {
     await page.fill('#pickupSearch', 'no-such-pickup-batch-' + Date.now());
     await page.waitForFunction(() => /没有匹配内容|No matching records/.test(document.querySelector('#list')?.textContent || ''), null, { timeout: 10000 });
     await page.goto(detailUrl, { waitUntil: 'networkidle' });
+    let nativeDialogOpened = false;
     page.once('dialog', async dialog => {
-      await dialog.accept('browser qa revert');
+      nativeDialogOpened = true;
+      await dialog.dismiss();
     });
-    await page.locator('button', { hasText: /回退|Revert/ }).first().click();
-    await page.waitForTimeout(600);
+    await page.locator('.menu-trigger').first().click();
+    await page.locator('.menu-pop button', { hasText: /回退|Revert/ }).click();
+    await page.waitForSelector('.modal-backdrop.open textarea', { timeout: 10000 });
+    await page.fill('.modal-backdrop.open textarea', 'browser qa revert');
+    await page.locator('.modal-backdrop.open [data-role="ok"]').click();
+    await page.waitForTimeout(800);
+    if (nativeDialogOpened) throw new Error('pickup revert should use in-app modal, not native dialog');
     const after = await page.locator('#body').textContent();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     if (!/已回退|Reverted/.test(after || '')) throw new Error('reverted marker missing');

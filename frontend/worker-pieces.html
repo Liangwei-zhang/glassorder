@@ -4,17 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Piece Grid</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
   <a href="#" id="backBtn" class="back-btn">‹</a>
-  <div style="flex:1; min-width:0;">
-    <div style="font-size: 11px; color: var(--text-2);" id="sub"></div>
-    <div style="font-size: 17px; font-weight: 700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="title" data-i18n="pieceGrid">片子网格</div>
-  </div>
+  <div class="topbar-title" id="title" data-i18n="pieceGrid">片子网格</div>
   <button class="select-btn" id="selectToggle" type="button" onclick="toggleSelectMode()" data-i18n="selectMode">选择</button>
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
+</div>
+
+<div class="center-col worker-order-context-shell">
+  <section class="worker-order-context" id="orderContext" aria-label="order information">
+    <div class="worker-order-context-kicker" id="sub" data-i18n="workOrder">工单</div>
+    <div class="worker-order-context-title" id="orderContextCompany" data-i18n="loading">加载中...</div>
+    <div class="worker-order-context-meta" id="orderContextMeta"></div>
+  </section>
 </div>
 
 <div style="background: var(--surface); padding: 8px 12px; overflow-x: auto; white-space: nowrap; position: sticky; top: 60px; z-index: 5; box-shadow: 0 0.5px 0 var(--border-1);">
@@ -104,8 +109,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 ensureAuth();
 const params = new URLSearchParams(location.search);
@@ -132,15 +137,25 @@ if (_fromParam === 'worker' || _role === 'worker' || referer.includes('worker-qu
 document.getElementById('backBtn').href = backTarget;
 
 async function loadOrder() {
-  const data = await api('/api/orders/' + orderId);
-  order = data.order;
+  const data = await api('/api/pieces?order_id=' + encodeURIComponent(orderId));
+  const pieces = data.pieces || [];
+  const first = pieces[0] || {};
+  order = {
+    id: Number(orderId),
+    order_number: first.order_number || orderId,
+    project_name: first.project_name || '',
+    company: first.company || t('pieceGrid'),
+    pieces,
+  };
   headerRender();
   setStageTab(currentStage);
 }
 
 function headerRender() {
-  document.getElementById('sub').textContent = `${t('workOrder')} #${order.order_number} · ${order.project_name || ''}`;
-  document.getElementById('title').textContent = order.company;
+  document.getElementById('title').textContent = t('pieceGrid');
+  document.getElementById('sub').textContent = `${t('workOrder')} #${order.order_number}`;
+  document.getElementById('orderContextCompany').textContent = order.company || t('pieceGrid');
+  document.getElementById('orderContextMeta').textContent = order.project_name || t('notSet');
 }
 
 function patchPieces(updatedPieces) {
@@ -310,8 +325,15 @@ function openPieceModal(id) {
   document.getElementById('mSub').textContent = `${p.size || ''}${p.weight ? ' · ' + p.weight : ''}${p.piece_note ? ' · ' + p.piece_note : ''}`;
   const dEl = document.getElementById('mDrawing');
   if (p.drawing_path) {
-    dEl.innerHTML = `<img src="${escAttr(p.drawing_path)}" style="width: 100%; display:block;" onerror="this.parentElement.innerHTML='<div style=\\'padding:40px;text-align:center;color: var(--danger);\\'>${esc(t('drawingFailed'))}</div>'">
+    dEl.innerHTML = `<div style="padding:40px; text-align:center; color:var(--text-3);">${esc(t('loading'))}</div>`;
+    authFileUrl(p.drawing_path).then((url) => {
+      if (!currentPiece || Number(currentPiece.id) !== Number(p.id)) return;
+      dEl.innerHTML = `<img src="${escAttr(url)}" style="width: 100%; display:block;" onerror="this.parentElement.innerHTML='<div style=\\'padding:40px;text-align:center;color: var(--danger);\\'>${esc(t('drawingFailed'))}</div>'">
       <div style="position:absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,.7); color: white; padding: 4px 10px; border-radius: 6px; font-size: 12px;">${esc(t('clickEnlarge'))}</div>`;
+    }).catch(() => {
+      if (!currentPiece || Number(currentPiece.id) !== Number(p.id)) return;
+      dEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--danger);">${esc(t('drawingFailed'))}</div>`;
+    });
   } else {
     dEl.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--text-3);">${esc(t('noDrawing'))}</div>`;
   }
@@ -461,8 +483,13 @@ function openFullDrawing() {
   document.getElementById('fullTitle').textContent = `${tn('pieceN', { n: currentPiece.piece_no })} · ${currentPiece.thickness || ''} ${currentPiece.type || ''}`;
   document.getElementById('fullSub').textContent = `${currentPiece.size || ''}${currentPiece.weight ? ' · ' + currentPiece.weight : ''}`;
   const img = document.getElementById('fullDrawing');
-  img.src = currentPiece.drawing_path;
-  img.onload = () => fitImageToViewer();
+  const pieceId = Number(currentPiece.id);
+  img.removeAttribute('src');
+  authFileUrl(currentPiece.drawing_path).then((url) => {
+    if (!currentPiece || Number(currentPiece.id) !== pieceId) return;
+    img.src = url;
+    img.onload = () => fitImageToViewer();
+  }).catch((err) => toast(err.message, { type: 'danger' }));
   document.getElementById('pieceModal').classList.remove('open');
   document.getElementById('drawingModal').classList.add('open');
 }

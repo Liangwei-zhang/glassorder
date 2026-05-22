@@ -6,9 +6,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 LOG_DIR="$BACKEND_DIR/logs"
-PID_FILE="$BACKEND_DIR/logs/server.pid"
-LOG_FILE="$BACKEND_DIR/logs/server.log"
-ENV_FILE="$BACKEND_DIR/.env"
+ENV_FILE="${ENV_FILE:-$BACKEND_DIR/.env}"
+ENV_BASENAME="$(basename "$ENV_FILE")"
+PROFILE_SUFFIX=""
+if [ "$ENV_BASENAME" != ".env" ]; then
+  profile_name="$(printf '%s' "$ENV_BASENAME" | sed -E 's/^\.env[._-]?//; s/\.env$//; s/[^A-Za-z0-9._-]+/-/g; s/^-+|-+$//g')"
+  [ -n "$profile_name" ] && PROFILE_SUFFIX="-$profile_name"
+fi
+PID_FILE="$BACKEND_DIR/logs/server${PROFILE_SUFFIX}.pid"
+LOG_FILE="$BACKEND_DIR/logs/server${PROFILE_SUFFIX}.log"
 
 mkdir -p "$LOG_DIR"
 

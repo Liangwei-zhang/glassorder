@@ -6,6 +6,9 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { sendPickupEmail } = require('../services/mailer');
 
 const router = express.Router();
+const uploadsBase = (db.runtime && db.runtime.uploadsBase)
+  ? db.runtime.uploadsBase
+  : path.join(__dirname, '..', 'uploads');
 
 router.use(authenticate);
 
@@ -30,7 +33,7 @@ function validateEmail(email) {
   return v;
 }
 
-router.get('/', (req, res) => {
+router.get('/', requireRole('boss'), (req, res) => {
   const search = String(req.query.search || '').trim();
   const params = {};
   const where = search
@@ -209,7 +212,7 @@ router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
   `).get(customer.id);
   if (!row) return res.status(400).json({ error: 'No pickup slip exists for this customer' });
 
-  const slipPath = path.join(__dirname, '..', row.slip_pdf_path.replace(/^\/uploads\//, 'uploads/'));
+  const slipPath = path.join(uploadsBase, row.slip_pdf_path.replace(/^\/uploads\//, ''));
   if (!fs.existsSync(slipPath)) return res.status(400).json({ error: 'Pickup slip file is missing' });
 
   const mail = sendPickupEmail({ order: row, slipPath, to: customer.email });

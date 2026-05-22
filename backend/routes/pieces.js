@@ -45,7 +45,7 @@ function body(req) {
   return req.body || {};
 }
 
-router.get('/', (req, res) => {
+router.get('/', requireRole('boss', 'worker'), (req, res) => {
   const where = [];
   const params = {};
   if (req.query.stage) {

@@ -39,12 +39,21 @@ if [ ! -d "$BACKEND_DIR/node_modules" ]; then
   (cd "$BACKEND_DIR" && npm install --no-audit --no-fund)
 fi
 
-# Create .env if missing, with a random JWT_SECRET
+# Create env file if missing, with a random JWT_SECRET
 if [ ! -f "$ENV_FILE" ]; then
   SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+  DB_FILE="./glass.db"
+  UPLOADS_DIR="./uploads"
+  case "$ENV_FILE" in
+    *demo*.env|*.demo.env)
+      DB_FILE="./glass-demo.db"
+      UPLOADS_DIR="./uploads-demo"
+      ;;
+  esac
   cat > "$ENV_FILE" <<EOF
 PORT=8781
-DB_PATH=./glass.db
+DB_PATH=$DB_FILE
+UPLOADS_DIR=$UPLOADS_DIR
 JWT_SECRET=$SECRET
 
 SMTP_HOST=
@@ -54,6 +63,9 @@ SMTP_USER=
 SMTP_PASS=
 SMTP_FROM=
 EOF
+  if [[ "$ENV_FILE" = *demo*.env || "$ENV_FILE" = *.env.demo ]]; then
+    perl -0pi -e 's/^PORT=8781$/PORT=8782/m' "$ENV_FILE"
+  fi
   echo "Created $ENV_FILE with random JWT_SECRET and PORT=8781"
 fi
 

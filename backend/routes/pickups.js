@@ -5,8 +5,12 @@ const db = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createPickupBatchSlip } = require('../services/pickupSlip');
 const { syncOrderStatusFromPieces } = require('../services/orderStatus');
+const { decodePngSignature } = require('../services/signature');
 
 const router = express.Router();
+const uploadsBase = (db.runtime && db.runtime.uploadsBase)
+  ? db.runtime.uploadsBase
+  : path.join(__dirname, '..', 'uploads');
 
 router.use(authenticate);
 
@@ -22,26 +26,42 @@ function safeInt(value) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-function uniqueBatchNumber() {
+function batchPrefix() {
   const date = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-  const prefix = `PU-${date}`;
-  const row = db.prepare(`
-    SELECT batch_number
-    FROM pickup_batches
-    WHERE batch_number LIKE ?
-    ORDER BY id DESC
-    LIMIT 1
-  `).get(`${prefix}-%`);
-  const last = row ? Number(String(row.batch_number).split('-').pop()) : 0;
-  return `${prefix}-${String(last + 1).padStart(4, '0')}`;
+  return `PU-${date}`;
 }
 
-function decodeSignature(signatureBase64) {
-  const raw = String(signatureBase64 || '').trim();
-  if (!raw) return null;
-  const base64 = raw.replace(/^data:image\/png;base64,/, '');
-  const buffer = Buffer.from(base64, 'base64');
-  return buffer.length ? buffer : null;
+function nextBatchNumber() {
+  const prefix = batchPrefix();
+  const maxExisting = db.prepare(`
+    SELECT COALESCE(MAX(CAST(SUBSTR(batch_number, ?) AS INTEGER)), 0) AS seq
+    FROM pickup_batches
+    WHERE batch_number LIKE ?
+  `).get(prefix.length + 2, `${prefix}-%`).seq;
+  const insert = db.prepare(`
+    INSERT INTO pickup_batch_counters (prefix, next_seq)
+    VALUES (?, ?)
+    ON CONFLICT(prefix) DO UPDATE SET
+      next_seq = CASE
+        WHEN pickup_batch_counters.next_seq < excluded.next_seq THEN excluded.next_seq
+        ELSE pickup_batch_counters.next_seq
+      END
+  `);
+  const bump = db.prepare(`
+    UPDATE pickup_batch_counters
+    SET next_seq = next_seq + 1
+    WHERE prefix = ?
+    RETURNING next_seq - 1 AS seq
+  `);
+  insert.run(prefix, Number(maxExisting || 0) + 1);
+  const row = bump.get(prefix);
+  const seq = row && Number(row.seq);
+  if (!Number.isInteger(seq) || seq < 1) {
+    const err = new Error('Failed to allocate pickup batch number');
+    err.status = 500;
+    throw err;
+  }
+  return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
 
 function availableRows(customerId) {
@@ -157,7 +177,7 @@ router.get('/available/all', requireRole('boss'), (req, res) => {
       AND p.stage = 'finished'
       AND p.hold = 0
       AND p.picked_up_at IS NULL
-    ORDER BY c.company, o.deadline IS NULL, o.deadline, o.created_at, o.id, p.piece_no
+    ORDER BY o.created_at DESC, o.id DESC, p.piece_no
     LIMIT 500
   `).all();
   res.json({ pieces: rows, total_pieces: rows.length });
@@ -204,8 +224,9 @@ router.post('/batches', requireRole('boss'), async (req, res, next) => {
     if (!pieceIds.length) return res.status(400).json({ error: 'piece_ids are required' });
     const signerName = String(req.body.signer_name || '').trim();
     if (!signerName) return res.status(400).json({ error: 'signer_name is required' });
-    const signatureBuffer = decodeSignature(req.body.signature_base64);
-    if (!signatureBuffer) return res.status(400).json({ error: 'signature_base64 is required' });
+    const decodedSignature = decodePngSignature(req.body.signature_base64);
+    if (decodedSignature.error) return res.status(400).json({ error: decodedSignature.error });
+    const signatureBuffer = decodedSignature.buffer;
 
     const placeholders = pieceIds.map(() => '?').join(',');
     const rows = db.prepare(`
@@ -240,16 +261,17 @@ router.post('/batches', requireRole('boss'), async (req, res, next) => {
       phone: rows[0].customer_phone,
       email: rows[0].customer_email,
     };
-    const signatureDir = path.join(__dirname, '..', 'uploads', 'signatures');
-    const slipDir = path.join(__dirname, '..', 'uploads', 'slips');
+    const signatureDir = path.join(uploadsBase, 'signatures');
+    const slipDir = path.join(uploadsBase, 'slips');
     fs.mkdirSync(signatureDir, { recursive: true });
     fs.mkdirSync(slipDir, { recursive: true });
-    const batchNumber = uniqueBatchNumber();
-    const signatureFile = `signature-${batchNumber}-${Date.now()}.png`;
+    const batchNumber = db.transaction(() => nextBatchNumber())();
+    const fileToken = `${Date.now()}-${process.hrtime.bigint().toString(36)}`;
+    const signatureFile = `signature-${batchNumber}-${fileToken}.png`;
     const signaturePath = path.join(signatureDir, signatureFile);
     fs.writeFileSync(signaturePath, signatureBuffer);
 
-    const slipFile = `pickup-${batchNumber}-${Date.now()}.pdf`;
+    const slipFile = `pickup-${batchNumber}-${fileToken}.pdf`;
     const slipPath = path.join(slipDir, slipFile);
     await createPickupBatchSlip({
       batch: { batch_number: batchNumber },

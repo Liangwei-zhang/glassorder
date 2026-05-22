@@ -1,11 +1,87 @@
 const API_BASE = '';
 const TOKEN_KEY = 'glassorder_token';
 const USER_KEY = 'glassorder_user';
+const MOTION_ITEM_SELECTOR = [
+  '.stat-tile',
+  '.pickup-stat-card',
+  '.dashboard-task-card',
+  '.customer-rank-card',
+  '.worker-hero',
+  '.worker-stage-card',
+  '.empty-state',
+  '.row',
+  '.customer-rank-pill',
+  '.worker-company',
+  '.skel-row',
+].join(',');
+
+let motionTier = 'off';
+let motionRevealObserver = null;
+let motionSchedule = 0;
+let motionBoundCount = 0;
+let transitionLoaderDepth = 0;
+let transitionLoaderShownAt = 0;
+let transitionLoaderCloseTimer = null;
+const motionRoots = new Set();
+const authFileCache = new Map();
+let overlayDepth = 0;
+let installPromptEvent = null;
+let pwaRuntimeBound = false;
+let updateRefreshHandlerBound = false;
+let pendingRefreshAction = null;
+
+function appHaptic(pattern = 10) {
+  if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+  try { navigator.vibrate(pattern); } catch (_) {}
+}
+
+function isStandaloneMode() {
+  return Boolean(
+    (typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(display-mode: standalone)').matches)
+    || (typeof navigator !== 'undefined' && navigator.standalone)
+  );
+}
+
+function isIosBrowser() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const webkit = /WebKit/i.test(ua);
+  const standalone = Boolean(navigator.standalone);
+  return iOS && webkit && !standalone;
+}
+
+function lockAppOverlay() {
+  overlayDepth += 1;
+  if (overlayDepth === 1 && document.body) document.body.classList.add('app-overlay-open');
+}
+
+function unlockAppOverlay() {
+  overlayDepth = Math.max(0, overlayDepth - 1);
+  if (overlayDepth === 0 && document.body) document.body.classList.remove('app-overlay-open');
+}
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function getMotionTier() {
+  if (prefersReducedMotion()) return 'off';
+  if (typeof navigator === 'undefined') return 'premium';
+  const connection = navigator.connection || navigator.webkitConnection || navigator.mozConnection;
+  if (connection && connection.saveData) return 'lite';
+  const cores = Number(navigator.hardwareConcurrency || 0);
+  const memory = Number(navigator.deviceMemory || 0);
+  if ((cores && cores <= 4) || (memory && memory <= 3)) return 'lite';
+  return 'premium';
+}
+
+function motionItemLimit() {
+  return motionTier === 'premium' ? 56 : 24;
 }
 
 function flashMotion(el, className, ttl = 420) {
@@ -44,7 +120,255 @@ function animateNumbers(root = document) {
   root.querySelectorAll('.num-big, .pickup-stat-card .value, .worker-hero-num, .worker-pending-pill .count').forEach((el) => {
     if (el.dataset.countAnimated === el.textContent) return;
     el.dataset.countAnimated = el.textContent;
-    animateNumber(el);
+    animateNumber(el, motionTier === 'lite' ? 360 : 680);
+  });
+}
+
+function pwaBannerRoot() {
+  if (typeof document === 'undefined' || !document.body) return null;
+  let root = document.getElementById('pwa-banner-stack');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'pwa-banner-stack';
+    root.className = 'pwa-banner-stack';
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function closePwaBanner(id) {
+  const root = document.getElementById('pwa-banner-stack');
+  if (!root) return;
+  const item = root.querySelector(`[data-banner-id="${id}"]`);
+  if (!item) return;
+  item.classList.add('leave');
+  window.setTimeout(() => item.remove(), 180);
+}
+
+function renderPwaBanner({ id, tone = '', title = '', body = '', primaryText = '', secondaryText = '', onPrimary = null, onSecondary = null, sticky = false }) {
+  const root = pwaBannerRoot();
+  if (!root) return;
+  const existing = root.querySelector(`[data-banner-id="${id}"]`);
+  if (existing) existing.remove();
+  const item = document.createElement('section');
+  item.className = `pwa-banner ${tone}`.trim();
+  item.dataset.bannerId = id;
+  if (sticky) item.dataset.sticky = '1';
+  item.innerHTML = `
+    <div class="pwa-banner-copy">
+      <strong>${esc(title)}</strong>
+      ${body ? `<span>${esc(body)}</span>` : ''}
+    </div>
+    <div class="pwa-banner-actions">
+      ${secondaryText ? `<button type="button" class="btn btn-ghost pwa-banner-btn" data-role="secondary">${esc(secondaryText)}</button>` : ''}
+      ${primaryText ? `<button type="button" class="btn btn-primary pwa-banner-btn" data-role="primary">${esc(primaryText)}</button>` : ''}
+    </div>`;
+  root.appendChild(item);
+  item.addEventListener('click', (event) => {
+    const role = event.target && event.target.dataset ? event.target.dataset.role : '';
+    if (role === 'primary' && typeof onPrimary === 'function') onPrimary();
+    if (role === 'secondary' && typeof onSecondary === 'function') onSecondary();
+  });
+  scheduleMotion(item);
+}
+
+function setPwaModeClasses() {
+  if (typeof document === 'undefined' || !document.body) return;
+  const standalone = isStandaloneMode();
+  document.body.classList.toggle('pwa-installed', standalone);
+  document.body.classList.toggle('pwa-browser', !standalone);
+  document.body.dataset.appMode = standalone ? 'installed' : 'browser';
+}
+
+async function launchInstallPrompt() {
+  if (installPromptEvent && typeof installPromptEvent.prompt === 'function') {
+    installPromptEvent.prompt();
+    try { await installPromptEvent.userChoice; } catch (_) {}
+    return;
+  }
+  if (isIosBrowser()) {
+    renderPwaBanner({
+      id: 'ios-install',
+      tone: 'info',
+      title: t('installIosTitle'),
+      body: t('installIosBody'),
+      primaryText: t('confirm'),
+      secondaryText: t('installDismiss'),
+      onPrimary: () => closePwaBanner('ios-install'),
+      onSecondary: () => closePwaBanner('ios-install'),
+      sticky: true,
+    });
+  }
+}
+
+function refreshAppShellLabels() {
+  setPwaModeClasses();
+  const installed = isStandaloneMode();
+  document.querySelectorAll('[data-app-line-browser]').forEach((el) => {
+    el.textContent = t(installed ? el.dataset.appLineInstalled : el.dataset.appLineBrowser);
+  });
+  document.querySelectorAll('[data-install-hide-installed]').forEach((el) => {
+    el.hidden = installed;
+  });
+  document.querySelectorAll('[data-install-only-browser]').forEach((el) => {
+    el.hidden = installed;
+  });
+}
+
+function showInstallBanner() {
+  if (isStandaloneMode()) {
+    closePwaBanner('install');
+    closePwaBanner('ios-install');
+    return;
+  }
+  if (installPromptEvent) {
+    renderPwaBanner({
+      id: 'install',
+      tone: 'info',
+      title: t('installAvailable'),
+      body: t('appBrowserLine'),
+      primaryText: t('installApp'),
+      secondaryText: t('installDismiss'),
+      onPrimary: () => { closePwaBanner('install'); launchInstallPrompt(); },
+      onSecondary: () => closePwaBanner('install'),
+    });
+    return;
+  }
+  if (isIosBrowser()) {
+    renderPwaBanner({
+      id: 'ios-install',
+      tone: 'info',
+      title: t('installIosTitle'),
+      body: t('installIosBody'),
+      primaryText: t('confirm'),
+      secondaryText: t('installDismiss'),
+      onPrimary: () => closePwaBanner('ios-install'),
+      onSecondary: () => closePwaBanner('ios-install'),
+    });
+  }
+}
+
+function showOfflineBanner() {
+  renderPwaBanner({
+    id: 'offline',
+    tone: 'warn',
+    title: t('networkError'),
+    body: t('offlineBanner'),
+    sticky: true,
+  });
+}
+
+function hideOfflineBanner() {
+  closePwaBanner('offline');
+}
+
+function showUpdateBanner() {
+  if (pendingRefreshAction) return;
+  pendingRefreshAction = () => {
+    sessionStorage.removeItem('__sw_reloaded__');
+    location.reload();
+  };
+  renderPwaBanner({
+    id: 'update-ready',
+    tone: 'success',
+    title: t('updateReady'),
+    body: t('updateReadyBody'),
+    primaryText: t('updateNow'),
+    secondaryText: t('installDismiss'),
+    onPrimary: () => pendingRefreshAction && pendingRefreshAction(),
+    onSecondary: () => closePwaBanner('update-ready'),
+    sticky: true,
+  });
+}
+
+function initPwaRuntime() {
+  if (pwaRuntimeBound || typeof window === 'undefined') return;
+  pwaRuntimeBound = true;
+  setPwaModeClasses();
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    installPromptEvent = event;
+    refreshAppShellLabels();
+    showInstallBanner();
+  });
+  window.addEventListener('appinstalled', () => {
+    installPromptEvent = null;
+    closePwaBanner('install');
+    closePwaBanner('ios-install');
+    refreshAppShellLabels();
+    toast(t('appInstalledLine'), { type: 'success', ttl: 2200 });
+  });
+  window.addEventListener('online', () => {
+    hideOfflineBanner();
+    toast(t('onlineBack'), { type: 'success', ttl: 1800 });
+  });
+  window.addEventListener('offline', () => {
+    showOfflineBanner();
+  });
+  if (!navigator.onLine) showOfflineBanner();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshAppShellLabels();
+      showInstallBanner();
+    }, { once: true });
+  } else {
+    refreshAppShellLabels();
+    showInstallBanner();
+  }
+}
+
+function revealMotionElement(el) {
+  if (!el || !el.classList) return;
+  function markVisible(target) {
+    if (target.dataset.motionDoneHook !== '1') {
+      target.dataset.motionDoneHook = '1';
+      target.addEventListener('animationend', () => target.classList.add('motion-done'), { once: true });
+    }
+    target.classList.add('motion-visible');
+  }
+  if (motionRevealObserver) {
+    motionRevealObserver.observe(el);
+  } else {
+    markVisible(el);
+  }
+}
+
+function primeMotionElements(root = document) {
+  if (motionTier === 'off') return;
+  const doc = root && root.ownerDocument ? root.ownerDocument : document;
+  const limit = motionItemLimit();
+  const candidates = [];
+  if (root && root.nodeType === 1 && root.matches && root.matches(MOTION_ITEM_SELECTOR)) {
+    candidates.push(root);
+  }
+  if (root && root.querySelectorAll) {
+    root.querySelectorAll(MOTION_ITEM_SELECTOR).forEach((el) => candidates.push(el));
+  }
+  candidates.forEach((el) => {
+    if (!el || el.dataset.motionBound === '1' || motionBoundCount >= limit) return;
+    if (el.closest && el.closest('.modal-backdrop, .customer-picker-results')) return;
+    el.dataset.motionBound = '1';
+    el.style.setProperty('--motion-delay', `${motionTier === 'lite' ? 0 : Math.min(motionBoundCount, 10) * 22}ms`);
+    el.classList.add('motion-item');
+    motionBoundCount += 1;
+    revealMotionElement(el);
+  });
+}
+
+function scheduleMotion(root = document) {
+  if (motionTier === 'off') return;
+  motionRoots.add(root || document);
+  if (motionSchedule) return;
+  motionSchedule = requestAnimationFrame(() => {
+    motionSchedule = 0;
+    const roots = Array.from(motionRoots);
+    motionRoots.clear();
+    roots.forEach((root) => {
+      primeMotionElements(root);
+      animateNumbers(root && root.querySelectorAll ? root : document);
+    });
   });
 }
 
@@ -54,23 +378,100 @@ function preloadTransitionGif() {
   img.src = '/icons/loading.gif';
 }
 
-function showTransitionLoader() {
-  if (document.querySelector('.page-transition-loader')) return;
-  const overlay = document.createElement('div');
+function ensureTransitionLoader() {
+  let overlay = document.querySelector('.page-transition-loader');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
   overlay.className = 'page-transition-loader';
   overlay.setAttribute('aria-hidden', 'true');
   overlay.innerHTML = '<div class="page-transition-loader-box"><img src="/icons/loading.gif" alt=""></div>';
   document.body.appendChild(overlay);
+  return overlay;
+}
+
+function showTransitionLoader() {
+  if (typeof document === 'undefined' || !document.body) return () => {};
+  const overlay = ensureTransitionLoader();
+  let closed = false;
+  transitionLoaderDepth += 1;
+  transitionLoaderShownAt = transitionLoaderShownAt || performance.now();
+  if (transitionLoaderCloseTimer) {
+    clearTimeout(transitionLoaderCloseTimer);
+    transitionLoaderCloseTimer = null;
+  }
   requestAnimationFrame(() => overlay.classList.add('open'));
+  return (options) => {
+    if (closed) return;
+    closed = true;
+    hideTransitionLoader(options);
+  };
+}
+
+function hideTransitionLoader({ minMs = 180 } = {}) {
+  const overlay = document.querySelector('.page-transition-loader');
+  if (!overlay) return;
+  transitionLoaderDepth = Math.max(0, transitionLoaderDepth - 1);
+  if (transitionLoaderDepth > 0) return;
+  const elapsed = performance.now() - transitionLoaderShownAt;
+  const delay = Math.max(0, minMs - elapsed);
+  transitionLoaderCloseTimer = window.setTimeout(() => {
+    overlay.classList.remove('open');
+    transitionLoaderShownAt = 0;
+    if (transitionLoaderCloseTimer) {
+      clearTimeout(transitionLoaderCloseTimer);
+      transitionLoaderCloseTimer = null;
+    }
+    transitionLoaderCloseTimer = window.setTimeout(() => {
+      if (!overlay.classList.contains('open')) overlay.remove();
+      transitionLoaderCloseTimer = null;
+    }, 190);
+  }, delay);
+}
+
+async function withGlobalLoader(fn, options = {}) {
+  const close = showTransitionLoader();
+  try {
+    return await fn();
+  } finally {
+    close({ minMs: options.minMs || 260 });
+  }
+}
+
+function resetTransitionState() {
+  transitionLoaderDepth = 0;
+  transitionLoaderShownAt = 0;
+  if (transitionLoaderCloseTimer) {
+    clearTimeout(transitionLoaderCloseTimer);
+    transitionLoaderCloseTimer = null;
+  }
+  if (document.body) document.body.classList.remove('page-leaving');
+  document.querySelectorAll('.page-transition-loader').forEach((overlay) => overlay.remove());
 }
 
 function initPageMotion() {
   if (typeof document === 'undefined' || prefersReducedMotion()) return;
+  motionTier = getMotionTier();
+  if (motionTier === 'off') return;
+  if (typeof IntersectionObserver !== 'undefined') {
+    motionRevealObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting && entry.intersectionRatio <= 0) return;
+        const target = entry.target;
+        if (target.dataset.motionDoneHook !== '1') {
+          target.dataset.motionDoneHook = '1';
+          target.addEventListener('animationend', () => target.classList.add('motion-done'), { once: true });
+        }
+        target.classList.add('motion-visible');
+        motionRevealObserver.unobserve(entry.target);
+      });
+    }, { rootMargin: '120px 0px', threshold: 0.01 });
+  }
   function markReady() {
     if (!document.body) return;
-    document.body.classList.add('motion-ready', 'luxury-motion');
+    document.body.classList.add('motion-ready', 'luxury-motion', `motion-${motionTier}`);
+    document.body.dataset.motionTier = motionTier;
     preloadTransitionGif();
-    animateNumbers();
+    scheduleMotion(document);
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', markReady, { once: true });
@@ -103,8 +504,10 @@ function initPageMotion() {
       ? event.target.closest('.btn, .row, .bottom-nav a, .fab, .customer-rank-pill, .customer-picker-option, .stage-tab, .stage-btn, .menu-trigger, .add-trigger')
       : null;
     if (!target || target.disabled || target.dataset.ripple === 'off') return;
+    if (motionTier === 'lite' && target.matches('.row, .customer-picker-option')) return;
     const rect = target.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    target.querySelectorAll(':scope > .touch-ripple').forEach((r) => r.remove());
     const ripple = document.createElement('span');
     ripple.className = 'touch-ripple';
     const size = Math.max(rect.width, rect.height) * 1.45;
@@ -118,16 +521,27 @@ function initPageMotion() {
   const observer = new MutationObserver((records) => {
     for (const record of records) {
       record.addedNodes.forEach((node) => {
-        if (node.nodeType === 1) animateNumbers(node);
+        if (node.nodeType === 1) scheduleMotion(node);
       });
     }
   });
-  if (document.documentElement) {
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 }
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('pageshow', resetTransitionState);
+  window.addEventListener('pagehide', resetTransitionState);
+  window.addEventListener('popstate', resetTransitionState);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') resetTransitionState();
+  });
+}
+
 initPageMotion();
+initPwaRuntime();
+initNativeContextMenuGuard();
 
 // PWA: register service worker + inject manifest/iOS meta tags once per page load.
 (function injectPwaTags() {
@@ -174,7 +588,7 @@ initPageMotion();
 if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   // One-shot cache nuke for this release — guarantees stale 'stale-while-revalidate'
   // caches from earlier SW versions cannot serve outdated HTML.
-  const NUKE_KEY = '__sw_nuke_2026_05_21_pickup_tabs__';
+  const NUKE_KEY = '__sw_nuke_2026_05_21_worker_context_card__';
   if (!localStorage.getItem(NUKE_KEY)) {
     localStorage.setItem(NUKE_KEY, '1');
     if (window.caches && caches.keys) {
@@ -197,10 +611,7 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         if (!sw) return;
         sw.addEventListener('statechange', () => {
           if (sw.state === 'activated' && navigator.serviceWorker.controller) {
-            if (!sessionStorage.getItem('__sw_reloaded__')) {
-              sessionStorage.setItem('__sw_reloaded__', '1');
-              location.reload();
-            }
+            showUpdateBanner();
           }
         });
       });
@@ -227,11 +638,19 @@ function getUser() {
 }
 
 function setSession(token, user) {
+  authFileCache.forEach((url) => {
+    try { URL.revokeObjectURL(url); } catch (err) {}
+  });
+  authFileCache.clear();
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 function logout() {
+  authFileCache.forEach((url) => {
+    try { URL.revokeObjectURL(url); } catch (err) {}
+  });
+  authFileCache.clear();
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   location.href = 'login.html';
@@ -323,6 +742,43 @@ async function api(path, options = {}) {
   return data;
 }
 
+async function authFileUrl(path) {
+  if (!path) return '';
+  if (!String(path).startsWith('/uploads/')) return path;
+  if (authFileCache.has(path)) return authFileCache.get(path);
+
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(API_BASE + path, { headers, cache: 'no-store' });
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    if (!location.pathname.endsWith('/login.html') && !location.pathname.endsWith('login.html')) {
+      location.href = 'login.html';
+    }
+  }
+  if (!res.ok) {
+    const fallback = typeof t === 'function' ? t('requestFailed') : 'Request failed';
+    throw new Error(`${fallback} (${res.status})`);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  authFileCache.set(path, url);
+  return url;
+}
+
+async function openAuthFile(path) {
+  const tab = window.open('', '_blank', 'noopener');
+  try {
+    const url = await authFileUrl(path);
+    if (tab) tab.location.href = url;
+    else window.open(url, '_blank', 'noopener');
+  } catch (err) {
+    if (tab) tab.close();
+    throw err;
+  }
+}
+
 async function login(loginName, password) {
   const data = await api('/api/auth/login', {
     method: 'POST',
@@ -401,6 +857,8 @@ function toast(msg, opts) {
     old.remove();
   }
   const TTL = (opts && opts.ttl) || 2600;
+  if (variant === 'success') appHaptic([12, 20, 12]);
+  else if (variant === 'danger') appHaptic([18, 30, 18]);
   setTimeout(() => {
     el.classList.add('toast-leave');
     setTimeout(() => el.remove(), 220);
@@ -594,18 +1052,30 @@ function emptyState(text, icon) {
 }
 
 let _popMenuClose = null;
-function popMenu(anchorEl, items) {
+function isPopMenuOpen() {
+  return Boolean(_popMenuClose || document.querySelector('.menu-pop'));
+}
+
+function popMenu(anchorEl, items, options = {}) {
   closePopMenu();
   if (!anchorEl) return;
+  const openedAt = Date.now();
+  const ignoreOutsideClickMs = Number(options.ignoreOutsideClickMs || 0);
   const rect = anchorEl.getBoundingClientRect();
   const menu = document.createElement('div');
   menu.className = 'menu-pop';
-  menu.innerHTML = items.map((item, i) => {
+  const closeLabel = typeof t === 'function' ? t('closeMenu') : 'Close menu';
+  const itemHtml = items.map((item, i) => {
     if (item.divider) return '<div class="menu-divider"></div>';
     const cls = item.danger ? 'danger' : '';
     const dis = item.disabled ? 'disabled' : '';
-    return `<button data-idx="${i}" class="${cls}" ${dis}>${esc(item.label)}</button>`;
+    return `<button type="button" data-idx="${i}" class="${cls}" ${dis}>${esc(item.label)}</button>`;
   }).join('');
+  menu.innerHTML = `
+    <div class="menu-pop-head">
+      <button type="button" class="menu-pop-close" data-close-pop-menu aria-label="${escAttr(closeLabel)}">X</button>
+    </div>
+    ${itemHtml}`;
   // Position off-screen first to measure size, then snap to a viewport-safe spot.
   menu.style.visibility = 'hidden';
   menu.style.top = '0px';
@@ -617,24 +1087,41 @@ function popMenu(anchorEl, items) {
   const mw = menu.offsetWidth;
   const mh = menu.offsetHeight;
   const margin = 8;
-  // Cap to viewport height (allow scrolling inside if too tall).
-  if (mh > vh - margin * 2) {
-    menu.style.maxHeight = (vh - margin * 2) + 'px';
+  const mobileSheet = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 640px)').matches;
+  if (mobileSheet) {
+    menu.classList.add('sheet');
+    menu.style.maxHeight = `calc(100vh - ${margin * 2}px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))`;
     menu.style.overflowY = 'auto';
+    menu.style.top = 'auto';
+    menu.style.left = `${margin}px`;
+    menu.style.right = `${margin}px`;
+    menu.style.bottom = `calc(${margin}px + env(safe-area-inset-bottom, 0px))`;
+    menu.style.width = 'auto';
+  } else {
+    // Cap to viewport height (allow scrolling inside if too tall).
+    if (mh > vh - margin * 2) {
+      menu.style.maxHeight = (vh - margin * 2) + 'px';
+      menu.style.overflowY = 'auto';
+    }
+    // Vertical: prefer below anchor; flip up if below would overflow.
+    let top = rect.bottom + 6;
+    if (top + mh > vh - margin) {
+      top = Math.max(margin, rect.top - mh - 6);
+    }
+    // Horizontal: prefer right-aligned to anchor; clamp into viewport.
+    let left = rect.right - mw;
+    if (left < margin) left = margin;
+    if (left + mw > vw - margin) left = vw - margin - mw;
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
+    menu.style.right = 'auto';
+    menu.style.bottom = 'auto';
   }
-  // Vertical: prefer below anchor; flip up if below would overflow.
-  let top = rect.bottom + 6;
-  if (top + mh > vh - margin) {
-    top = Math.max(margin, rect.top - mh - 6);
-  }
-  // Horizontal: prefer right-aligned to anchor; clamp into viewport.
-  let left = rect.right - mw;
-  if (left < margin) left = margin;
-  if (left + mw > vw - margin) left = vw - margin - mw;
-  menu.style.top = top + 'px';
-  menu.style.left = left + 'px';
-  menu.style.right = 'auto';
   menu.style.visibility = 'visible';
+  lockAppOverlay();
+  appHaptic(12);
 
   function close() {
     if (menu.parentNode) menu.remove();
@@ -642,16 +1129,26 @@ function popMenu(anchorEl, items) {
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('resize', close);
     window.removeEventListener('scroll', close, true);
+    unlockAppOverlay();
     _popMenuClose = null;
   }
   function onDocClick(e) {
     if (menu.contains(e.target)) return;
+    if (ignoreOutsideClickMs && Date.now() - openedAt < ignoreOutsideClickMs) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     close();
   }
   function onKey(e) {
     if (e.key === 'Escape') close();
   }
   menu.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close-pop-menu]')) {
+      close();
+      return;
+    }
     const btn = e.target.closest('button[data-idx]');
     if (!btn || btn.disabled) return;
     const item = items[Number(btn.dataset.idx)];
@@ -670,6 +1167,8 @@ function popMenu(anchorEl, items) {
 function closePopMenu() {
   if (_popMenuClose) _popMenuClose();
   document.querySelectorAll('.menu-pop').forEach((m) => m.remove());
+  overlayDepth = 0;
+  if (document.body) document.body.classList.remove('app-overlay-open');
 }
 
 function confirmModal({ title, body, confirmText, cancelText, danger = false } = {}) {
@@ -693,6 +1192,8 @@ function confirmModal({ title, body, confirmText, cancelText, danger = false } =
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    lockAppOverlay();
+    appHaptic(12);
     requestAnimationFrame(() => overlay.classList.add('open'));
     const okBtn = overlay.querySelector('[data-role="ok"]');
     setTimeout(() => { try { okBtn.focus(); } catch (e) {} }, 30);
@@ -703,6 +1204,7 @@ function confirmModal({ title, body, confirmText, cancelText, danger = false } =
       settled = true;
       overlay.classList.remove('open');
       document.removeEventListener('keydown', onKey, true);
+      unlockAppOverlay();
       setTimeout(() => overlay.remove(), 220);
       resolve(result);
     }
@@ -716,6 +1218,69 @@ function confirmModal({ title, body, confirmText, cancelText, danger = false } =
       const role = e.target && e.target.dataset && e.target.dataset.role;
       if (role === 'cancel') close(false);
       if (role === 'ok') close(true);
+    });
+  });
+}
+
+function promptModal({ title, body, placeholder, confirmText, cancelText, required = true, maxLength = 300, danger = false } = {}) {
+  const ok = confirmText || t('confirm');
+  const no = cancelText || t('cancel');
+  const ttl = title || t('confirmTitle');
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-backdrop';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = `
+      <div class="modal">
+        <div style="margin-bottom: 12px;">
+          <div style="font-size: 20px; font-weight: 700; letter-spacing:-0.01em;">${esc(ttl)}</div>
+          ${body ? `<div style="color:var(--text-2); margin-top: 8px; font-size: 14px;">${esc(body)}</div>` : ''}
+        </div>
+        <textarea class="form-textarea" data-role="input" rows="4" maxlength="${Number(maxLength) || 300}" placeholder="${escAttr(placeholder || '')}"></textarea>
+        <div class="row-sub" data-role="hint" style="margin-top:8px;"></div>
+        <div style="display:flex; gap: 10px; margin-top: 14px;">
+          <button class="btn btn-ghost" style="flex:1;" data-role="cancel" type="button">${esc(no)}</button>
+          <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" style="flex:1;" data-role="ok" type="button">${esc(ok)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    lockAppOverlay();
+    appHaptic(12);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    const input = overlay.querySelector('[data-role="input"]');
+    const hint = overlay.querySelector('[data-role="hint"]');
+    setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
+
+    let settled = false;
+    function close(result) {
+      if (settled) return;
+      settled = true;
+      overlay.classList.remove('open');
+      document.removeEventListener('keydown', onKey, true);
+      unlockAppOverlay();
+      setTimeout(() => overlay.remove(), 220);
+      resolve(result);
+    }
+    function submit() {
+      const value = String(input.value || '').trim();
+      if (required && !value) {
+        hint.textContent = placeholder || ttl;
+        input.focus();
+        return;
+      }
+      close(value || null);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); close(null); }
+      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.stopPropagation(); submit(); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+      const role = e.target && e.target.dataset && e.target.dataset.role;
+      if (role === 'cancel') close(null);
+      if (role === 'ok') submit();
     });
   });
 }
@@ -778,10 +1343,92 @@ function skeletonRows(n) {
   return html + '</div>';
 }
 
+function renderSectionHeader(title, meta = '') {
+  return `<div class="section-head">
+    <strong>${esc(title || '')}</strong>
+    ${meta ? `<span>${esc(meta)}</span>` : ''}
+  </div>`;
+}
+
+function renderStatCells(items = [], options = {}) {
+  const className = options.className || 'metrics-grid';
+  return `<div class="${escAttr(className)}">${items.map((item) => `
+    <div class="metric-cell ${item.tone ? escAttr(item.tone) : ''}">
+      <b>${esc(String(item.value ?? 0))}</b>
+      <span>${esc(item.label || '')}</span>
+    </div>`).join('')}</div>`;
+}
+
+function renderPanel({ title = '', meta = '', body = '', className = '' } = {}) {
+  return `<section class="section-panel ${escAttr(className)}">
+    ${title ? renderSectionHeader(title, meta) : ''}
+    ${body || ''}
+  </section>`;
+}
+
+function renderPickupSteps(steps = [], note = '') {
+  return `${steps.map((step) => `
+    <div class="pickup-step ${step.done ? 'done' : ''} ${step.active ? 'active' : ''}">
+      <span>${esc(String(step.number))}</span><em>${esc(step.label || '')}</em>
+    </div>`).join('')}
+    ${note ? `<div class="pickup-selected-note">${esc(note)}</div>` : ''}`;
+}
+
+function initNativeContextMenuGuard() {
+  if (typeof document === 'undefined') return;
+  const appListSelector = [
+    '.row',
+    '.piece',
+    '.worker-company',
+    '.worker-order-row',
+    '.pickup-order-panel',
+    '.customer-list-panel',
+    '.summary-panel',
+    '.pickup-stat-card',
+    '.customer-rank-card',
+    '.customer-rank-pill',
+    '.dashboard-task-card',
+    '.stat-tile',
+    '.bottom-nav a',
+    '.fab',
+  ].join(',');
+  const editableSelector = 'input, textarea, select, [contenteditable="true"], canvas, .sig-pad';
+  document.addEventListener('contextmenu', (event) => {
+    const target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest(editableSelector)) return;
+    if (target.closest(appListSelector)) {
+      event.preventDefault();
+    }
+  }, true);
+}
+
+function debounce(fn, wait = 160) {
+  let timer = null;
+  return (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, wait);
+  };
+}
+
 if (typeof window !== 'undefined') {
   Object.assign(window, {
     initCustomerPicker,
     customerSearchText,
     normText,
+    debounce,
+    scheduleMotion,
+    showTransitionLoader,
+    hideTransitionLoader,
+    withGlobalLoader,
+    resetTransitionState,
+    promptModal,
+    renderSectionHeader,
+    renderStatCells,
+    renderPanel,
+    renderPickupSteps,
   });
 }

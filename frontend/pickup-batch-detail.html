@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup Batch</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -13,12 +13,12 @@
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
-<div class="center-col boss-shell" style="padding:16px;">
+<div class="content-shell bottom-nav-space boss-shell">
   <div id="body"></div>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 if (pageAllowed) injectBossNav('pickup');
@@ -40,38 +40,74 @@ function groupedItems() {
   return [...map.values()];
 }
 
+function batchStats() {
+  const groups = groupedItems();
+  const totalPieces = (batch.items || []).length;
+  const revertedPieces = (batch.items || []).filter(item => item.reverted_at).length;
+  return { groups, totalPieces, revertedPieces };
+}
+
 function render() {
   if (!batch) return;
+  const stats = batchStats();
   document.getElementById('title').textContent = batch.batch_number;
   document.getElementById('body').innerHTML = `
-    <div class="card" style="margin-bottom:12px;">
+    <div class="card flow-card">
       <div class="row-title">${esc(batch.company)}</div>
       <div class="row-sub">${esc(batch.signer_name)} · ${esc(batch.signer_phone || t('noPhone'))} · ${esc(relativeTime(batch.picked_at))}</div>
+      ${renderStatCells([
+        { value: stats.groups.length, label: t('ordersCount') },
+        { value: stats.totalPieces, label: t('pickedPieces') },
+        { value: stats.revertedPieces, label: t('revertedPieces'), tone: stats.revertedPieces ? 'danger' : '' },
+      ], { className: 'metrics-grid batch-summary-grid' })}
+      ${stats.revertedPieces ? `<div class="batch-status-note">${esc(tn('batchRevertedSummaryN', { n: stats.revertedPieces }))}</div>` : ''}
       <div style="display:flex; gap:8px; margin-top:12px;">
         <button class="btn btn-ghost" style="flex:1;" onclick="window.print()">${esc(t('printBtn'))}</button>
-        <a class="btn btn-primary" style="flex:1; text-decoration:none;" href="${escAttr(batch.slip_pdf_path)}" target="_blank">${esc(t('downloadPdfBtn'))}</a>
+        <button class="btn btn-primary" style="flex:1;" onclick="downloadBatchSlip()">${esc(t('downloadPdfBtn'))}</button>
       </div>
     </div>
-    ${groupedItems().map(group => `
-      <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
-        <div style="padding:12px 14px; background:var(--surface-2);">
-          <div class="row-title">#${esc(group.order_number)}</div>
-          <div class="row-sub">${esc(group.project_name || '')}</div>
-        </div>
+    ${stats.groups.map(group => `
+      ${renderPanel({
+        title: '#' + group.order_number,
+        meta: tn('piecesShortN', { n: group.items.length }),
+        body: `
         ${group.items.map(item => `
           <div class="row">
             <div style="flex:1;">
               <div class="row-title">${esc(tn('pieceN', { n: item.piece_no }))}</div>
               <div class="row-sub">${esc(item.size || '')} ${item.reverted_at ? '· ' + esc(t('reverted')) : ''}</div>
             </div>
-            ${item.reverted_at ? `<span class="badge badge-rework">${esc(t('reverted'))}</span>` : `<button class="btn btn-ghost" style="padding:8px 10px; min-height:0;" onclick="revertPiece(${item.piece_id})">${esc(t('revert'))}</button>`}
+            ${item.reverted_at ? `<span class="badge badge-rework">${esc(t('reverted'))}</span>` : `<button class="menu-trigger" type="button" onclick="pieceMenu(event, ${item.piece_id})" aria-label="more">⋯</button>`}
           </div>`).join('')}
-      </div>`).join('')}
+        `,
+        className: 'pickup-order-panel',
+      })}`).join('')}
   `;
 }
 
+function pieceMenu(event, pieceId) {
+  event.stopPropagation();
+  popMenu(event.currentTarget, [
+    { label: t('revert'), danger: true, onClick: () => revertPiece(pieceId) },
+  ]);
+}
+
+async function downloadBatchSlip() {
+  try {
+    await openAuthFile(batch.slip_pdf_path);
+  } catch (err) {
+    toast(err.message, { type:'danger' });
+  }
+}
+
 async function revertPiece(pieceId) {
-  const reason = prompt(t('revertReasonPrompt'));
+  const reason = await promptModal({
+    title: t('revertPickupConfirm'),
+    body: t('revertBatchPieceBody'),
+    placeholder: t('revertReasonPrompt'),
+    confirmText: t('menuRevertPickup'),
+    danger: true,
+  });
   if (!reason) return;
   try {
     const data = await api('/api/pickups/batches/' + batch.id + '/revert', {

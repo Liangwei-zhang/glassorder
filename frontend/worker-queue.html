@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Worker Queue</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -38,19 +38,21 @@
   <div id="list"></div>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = ensureAuth();
 const pageUser = pageAllowed && typeof getUser === 'function' ? getUser() : null;
 if (pageUser && pageUser.role === 'boss') injectBossNav('shop');
-let currentStage = 'cut';
+const WORKER_STAGE_KEY = 'glassorder_worker_stage';
+let currentStage = localStorage.getItem(WORKER_STAGE_KEY) || 'cut';
 let pieces = [];
 let reworkPieces = [];
 let firstLoad = true;
 
 async function setStage(stage) {
   currentStage = stage;
+  localStorage.setItem(WORKER_STAGE_KEY, stage);
   document.querySelectorAll('.stage-btn').forEach(b => {
     const on = b.dataset.stage === stage;
     b.className = 'stage-btn btn tap ' + (on ? 'btn-primary' : 'btn-ghost');
@@ -152,7 +154,7 @@ function setStageOrError(stage) {
     toast(err.message, { type: 'danger' });
   });
 }
-if (pageAllowed) setStageOrError('cut');
+if (pageAllowed) setStageOrError(currentStage);
 </script>
 </body>
 </html>

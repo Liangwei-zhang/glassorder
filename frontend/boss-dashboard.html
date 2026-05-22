@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Orders</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 
@@ -13,73 +13,111 @@
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
-<div class="center-col page-pad-bottom" style="padding: 16px;">
+<div class="content-shell bottom-nav-space page-pad-bottom">
   <div id="alerts"></div>
 
-  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px;">
-    <div class="stat-tile">
+  <div class="dashboard-stats">
+    <button class="stat-tile stat-action" type="button" data-quick-filter="all">
       <div id="stat-total" class="num-big">-</div>
       <div class="num-label" data-i18n="orderTotal">订单总数</div>
-    </div>
-    <div class="stat-tile">
-      <div id="stat-prod" class="num-big" style="color: var(--warn);">-</div>
+    </button>
+    <button class="stat-tile stat-action" type="button" data-quick-filter="in_production">
+      <div id="stat-prod" class="num-big stat-num-warn">-</div>
       <div class="num-label" data-i18n="statusInProduction">生产中</div>
-    </div>
-    <div class="stat-tile">
-      <div id="stat-pickup" class="num-big" style="color: var(--info);">-</div>
+    </button>
+    <button class="stat-tile stat-action" type="button" data-quick-filter="ready_pickup">
+      <div id="stat-pickup" class="num-big stat-num-info">-</div>
       <div class="num-label" data-i18n="pickupReady">待取货</div>
-    </div>
-    <div class="stat-tile">
-      <div id="stat-rework" class="num-big" style="color: var(--danger);">-</div>
+    </button>
+    <button class="stat-tile stat-action" type="button" data-quick-filter="rework">
+      <div id="stat-rework" class="num-big stat-num-danger">-</div>
       <div class="num-label" data-i18n="reworkN">待补片</div>
-    </div>
+    </button>
   </div>
 
-  <div style="display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px;">
-    <a class="btn filter-btn" id="archiveFilter" href="boss-dashboard.html?archived=1" style="padding: 8px 14px; min-height: 0; text-decoration:none;" data-i18n="archivedOrdersTitle">归档订单</a>
-    <button class="btn filter-btn" data-filter="all" style="padding: 8px 14px; min-height: 0;" data-i18n="all">全部</button>
-    <button class="btn filter-btn" data-filter="rush" style="padding: 8px 14px; min-height: 0;" data-i18n="filterRush">🔥 加急</button>
-    <button class="btn filter-btn" data-filter="overdue" style="padding: 8px 14px; min-height: 0;" data-i18n="filterOverdue">⏰ 逾期</button>
-    <button class="btn filter-btn" data-filter="in_production" style="padding: 8px 14px; min-height: 0;" data-i18n="statusInProduction">生产中</button>
-    <button class="btn filter-btn" data-filter="ready_pickup" style="padding: 8px 14px; min-height: 0;" data-i18n="statusReadyPickup">可取货</button>
+  <div class="dashboard-filter-bar">
+    <button class="btn filter-btn" data-view="active" data-filter="all" data-i18n="all">全部</button>
+    <button class="btn filter-btn" data-view="active" data-filter="picked_up" data-i18n="statusPickedUp">已取货</button>
+    <button class="btn filter-btn" id="moreFilterBtn" type="button" data-i18n="filterMore">筛选</button>
   </div>
 
-  <input class="form-input" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="搜索订单号 / 公司名" style="margin-bottom: 12px;">
-  <div id="list" class="card" style="padding: 0; overflow: hidden;"></div>
+  <input class="form-input search-block" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="搜索订单号 / 公司名">
+  <div id="list" class="card order-list-panel"></div>
 </div>
 
 <a class="fab" href="boss-new-order.html" aria-label="new order">+</a>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<div class="modal-backdrop" id="dashboardEditModal">
+  <div class="modal">
+    <div style="font-size:20px; font-weight:800; margin-bottom:12px;" data-i18n="editOrder">修改订单</div>
+    <label class="form-label" data-i18n="project">项目</label>
+    <input class="form-input" id="dashboardEditProject">
+    <label class="form-label" style="margin-top:10px;" data-i18n="priority">优先级</label>
+    <select class="form-select" id="dashboardEditPriority">
+      <option value="normal" data-i18n="priorityNormal">正常</option>
+      <option value="rush" data-i18n="priorityRush">加急</option>
+      <option value="rework" data-i18n="priorityRework">返工</option>
+    </select>
+    <label class="form-label" style="margin-top:10px;" data-i18n="deadline">计划日期</label>
+    <input class="form-input" id="dashboardEditDeadline" type="date">
+    <label class="form-label" style="margin-top:10px;" data-i18n="note">备注</label>
+    <textarea class="form-textarea" id="dashboardEditNote" rows="2"></textarea>
+    <div style="font-weight:700; margin-top:14px;" data-i18n="pieceNotes">片子工序 / 备注</div>
+    <div id="dashboardEditPieces" style="max-height:40vh; overflow:auto; margin-top:6px;"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="closeDashboardEdit()" data-i18n="cancel">取消</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="saveDashboardEdit(event)" data-i18n="saveChanges">保存修改</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 const archiveMode = new URLSearchParams(location.search).get('archived') === '1';
+let viewMode = archiveMode ? 'archive' : 'active';
 let currentFilter = 'all';
 let allOrders = [];
+let dashboardStats = null;
 let firstLoad = true;
 let searchDebounce = null;
+let dashboardLoadSeq = 0;
+let dashboardEditOrder = null;
+let longPressTimer = null;
+let longPressRow = null;
+let longPressStart = null;
+let lastLongPressAt = 0;
 
 const SCROLL_KEY = 'gd_scroll';
 window.addEventListener('beforeunload', () => {
   sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
 });
 
-async function loadOrders() {
+async function loadOrders(expectedSeq) {
   updatePageTitle();
   const q = document.getElementById('search').value.trim();
   const params = new URLSearchParams({ limit: '100' });
-  if (archiveMode) params.set('archived', '1');
+  const statsParams = new URLSearchParams();
+  if (viewMode === 'archive') params.set('archived', '1');
+  if (viewMode === 'archive') statsParams.set('archived', '1');
   if (currentFilter === 'rush') params.set('priority', 'rush');
-  else if (currentFilter !== 'all' && currentFilter !== 'overdue') params.set('status', currentFilter);
+  else if (currentFilter === 'overdue' || currentFilter === 'rework') params.set('filter', currentFilter);
+  else if (!['all', 'overdue', 'rework'].includes(currentFilter)) params.set('status', currentFilter);
   if (q) params.set('search', q);
   if (firstLoad) {
     document.getElementById('list').innerHTML = skeletonRows(5);
   }
-  const data = await api('/api/orders?' + params.toString());
-  allOrders = currentFilter === 'overdue' ? data.orders.filter(isOverdue) : data.orders;
-  renderStats(data.orders);
-  renderAlerts(data.orders);
+  const [data, statsData] = await Promise.all([
+    api('/api/orders?' + params.toString()),
+    api('/api/orders/stats' + (statsParams.toString() ? '?' + statsParams.toString() : '')),
+  ]);
+  if (expectedSeq && expectedSeq !== dashboardLoadSeq) return;
+  allOrders = data.orders || [];
+  dashboardStats = statsData.stats || null;
+  renderStats();
+  renderAlerts();
+  renderFilterState();
   renderList();
   if (firstLoad) {
     firstLoad = false;
@@ -91,31 +129,62 @@ async function loadOrders() {
   }
 }
 
-function renderStats(orders) {
-  document.getElementById('stat-total').textContent = orders.length;
-  document.getElementById('stat-prod').textContent = orders.filter(o => o.status === 'in_production').length;
-  document.getElementById('stat-pickup').textContent = orders.filter(o => o.status === 'ready_pickup').length;
-  document.getElementById('stat-rework').textContent = orders.reduce((sum, o) => sum + reworkCount(o), 0);
+function statNumber(key) {
+  return Number((dashboardStats && dashboardStats[key]) || 0);
 }
 
-function renderAlerts(orders) {
+function renderStats() {
+  document.getElementById('stat-total').textContent = statNumber('total_orders');
+  document.getElementById('stat-prod').textContent = statNumber('in_production_orders');
+  document.getElementById('stat-pickup').textContent = statNumber('ready_pickup_orders');
+  document.getElementById('stat-rework').textContent = statNumber('rework_pieces');
+  scheduleMotion(document.querySelector('.dashboard-stats'));
+}
+
+function renderAlerts() {
   const box = document.getElementById('alerts');
-  const reworkSum = orders.reduce((sum, o) => sum + reworkCount(o), 0);
-  const overdueOrders = orders.filter(isOverdue);
-  let html = '';
-  if (reworkSum > 0) {
-    html += `<div class="card" style="background:var(--danger-soft); color:var(--danger-text); margin-bottom: 10px; display:flex; align-items:center; gap:12px;">
-      <span class="dot dot-rework" style="width:10px; height:10px;"></span>
-      <div style="flex:1;"><b>${esc(tn('reworkAlertN', { n: reworkSum }))}</b><div style="font-size:12px; opacity:.8;">${esc(t('reworkAlertSub'))}</div></div>
-    </div>`;
+  const reworkSum = statNumber('rework_pieces');
+  const overdueCount = statNumber('overdue_orders');
+  const pickupCount = statNumber('ready_pickup_orders');
+  const overdueOrders = allOrders.filter(isOverdue).slice(0, 5);
+  const tasks = [];
+  if (reworkSum > 0) tasks.push({
+    tone: 'danger',
+    count: reworkSum,
+    title: tn('reworkAlertN', { n: reworkSum }),
+    sub: t('reworkAlertSub'),
+    filter: 'rework',
+  });
+  if (overdueCount > 0) tasks.push({
+    tone: 'warn',
+    count: overdueCount,
+    title: tn('overdueAlertN', { n: overdueCount }),
+    sub: overdueOrders.length ? overdueOrders.map(o => '#' + o.order_number).join(', ') : t('dashboardCheckOverdue'),
+    filter: 'overdue',
+  });
+  if (pickupCount > 0) tasks.push({
+    tone: 'info',
+    count: pickupCount,
+    title: tn('dashboardPickupTaskN', { n: pickupCount }),
+    sub: t('dashboardPickupTaskSub'),
+    filter: 'ready_pickup',
+  });
+  if (!tasks.length) {
+    box.innerHTML = '';
+    return;
   }
-  if (overdueOrders.length > 0) {
-    html += `<div class="card" style="background:var(--warn-soft); color:var(--warn-text); margin-bottom: 10px; display:flex; align-items:center; gap:12px;">
-      <span class="dot dot-hold" style="width:10px; height:10px;"></span>
-      <div style="flex:1;"><b>${esc(tn('overdueAlertN', { n: overdueOrders.length }))}</b><div style="font-size:12px; opacity:.8;">${overdueOrders.map(o => '#' + esc(o.order_number)).join(', ')}</div></div>
-    </div>`;
-  }
-  box.innerHTML = html;
+  box.innerHTML = `
+    <section class="task-priority-stack" aria-label="${escAttr(t('dashboardPriority'))}">
+      ${tasks.slice(0, 3).map(task => `
+        <button class="dashboard-task-card ${task.tone}" type="button" onclick="setDashboardFilter('${task.filter}', 'active')">
+          <span class="dashboard-task-count">${esc(String(task.count))}</span>
+          <span class="dashboard-task-main">
+            <strong>${esc(task.title)}</strong>
+            <em>${esc(task.sub)}</em>
+          </span>
+        </button>`).join('')}
+    </section>`;
+  scheduleMotion(box);
 }
 
 function renderList() {
@@ -127,8 +196,8 @@ function renderList() {
         <line x1="3" y1="9" x2="21" y2="9"></line>
         <line x1="9" y1="21" x2="9" y2="9"></line>
       </svg>
-      <div>${esc(archiveMode ? t('noArchivedOrders') : t('noOrdersMatch'))}</div>
-      <a class="btn btn-primary cta" href="${archiveMode ? 'boss-dashboard.html' : 'boss-new-order.html'}" style="text-decoration:none;">${esc(archiveMode ? t('viewActiveOrders') : t('newOrderCta'))}</a>
+      <div>${esc(viewMode === 'archive' ? t('noArchivedOrders') : t('noOrdersMatch'))}</div>
+      <a class="btn btn-primary cta" href="${viewMode === 'archive' ? 'boss-dashboard.html' : 'boss-new-order.html'}" style="text-decoration:none;">${esc(viewMode === 'archive' ? t('viewActiveOrders') : t('newOrderCta'))}</a>
     </div>`;
     return;
   }
@@ -138,38 +207,316 @@ function renderList() {
     const overdue = isOverdue(o);
     const pctClass = o.priority === 'rush' ? 'rush' : (pct === 100 ? 'done' : '');
     return `
-      <a class="row" href="boss-order-detail.html?id=${o.id}" style="flex-direction: column; align-items: stretch;">
-        <div style="display:flex; align-items:center; gap: 10px; width:100%;">
-          <div style="flex:1;">
+      <a class="row order-row order-card-layout" href="boss-order-detail.html?id=${o.id}" data-order-id="${o.id}">
+        <div class="order-card-main">
+          <div class="order-card-copy">
             <div class="row-title">
               ${orderTitle(o)}
-              ${o.priority === 'rush' ? `<span class="badge badge-rush" style="margin-left:6px;">${esc(t('badgeRush'))}</span>` : ''}
-              ${rw > 0 ? `<span class="badge badge-rework" style="margin-left:6px;">${esc(tn('badgeReworkN', { n: rw }))}</span>` : ''}
-              ${overdue ? `<span class="badge" style="background: var(--warn-soft); color: var(--warn-text); margin-left:6px;">${esc(t('badgeOverdue'))}</span>` : ''}
+              ${o.priority === 'rush' ? `<span class="badge badge-rush inline-badge-space">${esc(t('badgeRush'))}</span>` : ''}
+              ${rw > 0 ? `<span class="badge badge-rework inline-badge-space">${esc(tn('badgeReworkN', { n: rw }))}</span>` : ''}
+              ${overdue ? `<span class="badge badge-warn inline-badge-space">${esc(t('badgeOverdue'))}</span>` : ''}
             </div>
             <div class="row-sub">${esc(o.project_name || '')} · ${esc(tn('piecesShortN', { n: Number(o.total_pieces || 0) }))} · ${esc(t('plan'))} ${esc(o.deadline || t('notSet'))}</div>
           </div>
           ${statusBadge(o)}
         </div>
-        <div style="display:flex; align-items:center; gap: 8px; margin-top: 10px; width:100%;">
-          <div class="progress" style="flex:1;"><div class="progress-fill ${pctClass}" style="width:${pct}%;"></div></div>
-          <div style="font-size:12px; color: var(--text-2); width: 36px; text-align: right;">${pct}%</div>
+        <div class="order-card-progress">
+          <div class="progress"><div class="progress-fill ${pctClass}" style="width:${pct}%;"></div></div>
+          <div class="order-card-progress-value">${pct}%</div>
         </div>
       </a>`;
   }).join('');
 }
 
-document.querySelectorAll('[data-filter]').forEach(b => {
-  b.addEventListener('click', () => {
-    if (archiveMode && b.dataset.filter === 'all') {
-      location.href = 'boss-dashboard.html';
-      return;
+function getOrderById(orderId) {
+  return allOrders.find((item) => String(item.id) === String(orderId));
+}
+
+function primaryOrderAction(targetOrder) {
+  const pct = orderProgress(targetOrder);
+  if (targetOrder.status === 'ready_pickup') {
+    return {
+      label: t('pickupSign'),
+      onClick: () => { location.href = `pickup-search.html?order_id=${targetOrder.id}`; },
+    };
+  }
+  if (targetOrder.status === 'picked_up') {
+    return {
+      label: t('sendSlipBtn'),
+      onClick: () => sendDashboardSlip(targetOrder),
+    };
+  }
+  if (pct === 100) {
+    return {
+      label: t('notifyReady'),
+      onClick: () => markDashboardReady(targetOrder),
+    };
+  }
+  return {
+    label: t('workshopView'),
+    onClick: () => { location.href = `worker-pieces.html?id=${targetOrder.id}&stage=all`; },
+  };
+}
+
+function buildDashboardOrderMenu(targetOrder) {
+  const items = [
+    { label: t('menuEditOrder'), onClick: () => openDashboardEdit(targetOrder.id) },
+    primaryOrderAction(targetOrder),
+    { divider: true },
+    { label: t('orderDetail'), onClick: () => { location.href = `boss-order-detail.html?id=${targetOrder.id}`; } },
+  ];
+  if (targetOrder.status === 'picked_up') {
+    if (!targetOrder.archived_at) {
+      items.push({ label: t('menuArchiveOrder'), onClick: () => archiveDashboardOrder(targetOrder) });
+      items.push({ divider: true });
+      items.push({ label: t('menuRevertPickup'), danger: true, onClick: () => revertDashboardPickup(targetOrder) });
     }
-    currentFilter = b.dataset.filter;
-    document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    loadOrdersOrError();
+  }
+  return items;
+}
+
+function openDashboardOrderMenu(anchorEl, orderId, options = {}) {
+  const targetOrder = getOrderById(orderId);
+  if (!targetOrder) {
+    toast(t('requestFailed'), { type: 'danger' });
+    return;
+  }
+  popMenu(anchorEl, buildDashboardOrderMenu(targetOrder), options);
+}
+
+function clearLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  longPressRow = null;
+  longPressStart = null;
+}
+
+function bindOrderListGestures() {
+  const list = document.getElementById('list');
+  list.addEventListener('pointerdown', (event) => {
+    const row = event.target.closest('.order-row');
+    if (!row || event.pointerType === 'mouse' || event.button !== 0) return;
+    clearLongPress();
+    longPressRow = row;
+    longPressStart = { x: event.clientX, y: event.clientY };
+    longPressTimer = window.setTimeout(() => {
+      if (!longPressRow) return;
+      const pressedRow = longPressRow;
+      lastLongPressAt = Date.now();
+      pressedRow.classList.add('long-press-active');
+      window.setTimeout(() => pressedRow.classList.remove('long-press-active'), 260);
+      openDashboardOrderMenu(pressedRow, pressedRow.dataset.orderId, { ignoreOutsideClickMs: 900 });
+      clearLongPress();
+    }, 520);
   });
+  list.addEventListener('pointermove', (event) => {
+    if (!longPressStart) return;
+    const dx = Math.abs(event.clientX - longPressStart.x);
+    const dy = Math.abs(event.clientY - longPressStart.y);
+    if (dx > 10 || dy > 10) clearLongPress();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((name) => {
+    list.addEventListener(name, clearLongPress);
+  });
+  list.addEventListener('contextmenu', (event) => {
+    const row = event.target.closest('.order-row');
+    if (!row) return;
+    event.preventDefault();
+    if (Date.now() - lastLongPressAt < 900) return;
+    openDashboardOrderMenu(row, row.dataset.orderId);
+  });
+  list.addEventListener('click', (event) => {
+    if (Date.now() - lastLongPressAt < 700) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+}
+
+async function openDashboardEdit(orderId) {
+  try {
+    const data = await withGlobalLoader(() => api('/api/orders/' + orderId), { minMs: 220 });
+    dashboardEditOrder = data.order;
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+    return;
+  }
+  document.getElementById('dashboardEditProject').value = dashboardEditOrder.project_name || '';
+  document.getElementById('dashboardEditPriority').value = dashboardEditOrder.priority || 'normal';
+  document.getElementById('dashboardEditDeadline').value = dashboardEditOrder.deadline || '';
+  document.getElementById('dashboardEditNote').value = dashboardEditOrder.note || '';
+  document.getElementById('dashboardEditPieces').innerHTML = dashboardEditOrder.pieces.map(p => `
+    <div class="card" style="background: var(--surface-2); margin-top:8px; padding:10px;" data-dashboard-piece-edit="${p.id}">
+      <div style="font-weight:700;">#${p.piece_no} · ${esc(p.size || '')}</div>
+      <input class="form-input" style="margin-top:8px;" data-field="piece_note" value="${escAttr(p.piece_note || '')}" placeholder="${esc(t('note'))}">
+      <div class="checkbox-row">
+        <label><input type="checkbox" data-step="cut" ${pieceStepChecked(p, 'cut')}> ${esc(stageLabel('cut'))}</label>
+        <label><input type="checkbox" data-step="edge" ${pieceStepChecked(p, 'edge')}> ${esc(stageLabel('edge'))}</label>
+        <label><input type="checkbox" data-step="tempered" ${pieceStepChecked(p, 'tempered')}> ${esc(stageLabel('tempered'))}</label>
+      </div>
+    </div>`).join('');
+  document.getElementById('dashboardEditModal').classList.add('open');
+  applyI18n();
+}
+
+function closeDashboardEdit() {
+  document.getElementById('dashboardEditModal').classList.remove('open');
+}
+
+function pieceStepChecked(piece, step) {
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  return required.includes(step) ? 'checked' : '';
+}
+
+async function saveDashboardEdit(ev) {
+  if (!dashboardEditOrder) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const pieces = [...document.querySelectorAll('[data-dashboard-piece-edit]')].map(row => ({
+      id: Number(row.dataset.dashboardPieceEdit),
+      piece_note: row.querySelector('[data-field="piece_note"]').value.trim(),
+      required_steps: [...row.querySelectorAll('[data-step]:checked')].map(input => input.dataset.step),
+    }));
+    try {
+      await api('/api/orders/' + dashboardEditOrder.id, {
+        method: 'PATCH',
+        body: {
+          project_name: document.getElementById('dashboardEditProject').value.trim(),
+          priority: document.getElementById('dashboardEditPriority').value,
+          deadline: document.getElementById('dashboardEditDeadline').value,
+          note: document.getElementById('dashboardEditNote').value.trim(),
+          pieces,
+        },
+      });
+      closeDashboardEdit();
+      dashboardEditOrder = null;
+      await loadOrdersOrError();
+      toast(t('saved'), { type: 'success' });
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+}
+
+async function sendDashboardSlip(targetOrder) {
+  try {
+    await withGlobalLoader(async () => {
+      const data = await api('/api/orders/' + targetOrder.id + '/send-slip', { method: 'POST' });
+      const skipped = data.mail && data.mail.skipped;
+      toast(
+        skipped ? tn('slipSkipped', { reason: data.mail.reason || '' }) : t('slipSent'),
+        { type: skipped ? '' : 'success' },
+      );
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function markDashboardReady(targetOrder) {
+  const ok = await confirmModal({
+    title: t('notifyReadyConfirm'),
+    body: t('notifyReadyBody'),
+    confirmText: t('confirmNotify'),
+  });
+  if (!ok) return;
+  try {
+    await withGlobalLoader(async () => {
+      await api('/api/orders/' + targetOrder.id + '/ready', { method: 'POST' });
+      await loadOrdersOrError();
+      toast(t('markedReady'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function archiveDashboardOrder(targetOrder) {
+  const ok = await confirmModal({
+    title: t('archiveOrderConfirm'),
+    body: t('archiveOrderBody'),
+    confirmText: t('menuArchiveOrder'),
+  });
+  if (!ok) return;
+  try {
+    await withGlobalLoader(async () => {
+      await api('/api/orders/' + targetOrder.id + '/archive', { method: 'POST' });
+      await loadOrdersOrError();
+      toast(t('orderArchived'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+async function revertDashboardPickup(targetOrder) {
+  const ok = await confirmModal({
+    title: t('revertPickupConfirm'),
+    body: t('revertPickupBody'),
+    confirmText: t('menuRevertPickup'),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await withGlobalLoader(async () => {
+      await api('/api/orders/' + targetOrder.id + '/revert-pickup', { method: 'POST' });
+      await loadOrdersOrError();
+      toast(t('pickupReverted'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+function setDashboardFilter(nextFilter, nextView) {
+  viewMode = nextView || 'active';
+  currentFilter = nextFilter || 'all';
+  const url = viewMode === 'archive' ? 'boss-dashboard.html?archived=1' : 'boss-dashboard.html';
+  if (location.pathname.endsWith('/boss-dashboard.html') || location.pathname === '/') {
+    history.replaceState(null, '', url);
+  }
+  loadOrdersOrError();
+}
+
+function renderFilterState() {
+  document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
+  const activeBtn = viewMode === 'active'
+    ? document.querySelector(`[data-view="active"][data-filter="${currentFilter}"]`)
+    : null;
+  if (activeBtn) activeBtn.classList.add('active');
+  const moreBtn = document.getElementById('moreFilterBtn');
+  if (moreBtn) moreBtn.classList.toggle('active', viewMode === 'archive' || (viewMode === 'active' && !['all', 'picked_up'].includes(currentFilter)));
+  document.querySelectorAll('[data-quick-filter]').forEach((card) => {
+    card.classList.toggle('active', viewMode === 'active' && card.dataset.quickFilter === currentFilter);
+  });
+}
+
+document.querySelectorAll('[data-view]').forEach(b => {
+  b.addEventListener('click', () => {
+    const nextView = b.dataset.view === 'archive' ? 'archive' : 'active';
+    const nextFilter = nextView === 'archive' ? 'all' : (b.dataset.filter || 'all');
+    setDashboardFilter(nextFilter, nextView);
+  });
+});
+
+document.querySelectorAll('[data-quick-filter]').forEach(card => {
+  card.addEventListener('click', () => {
+    setDashboardFilter(card.dataset.quickFilter || 'all', 'active');
+  });
+});
+
+document.getElementById('moreFilterBtn').addEventListener('click', (event) => {
+  popMenu(event.currentTarget, [
+    { label: t('archiveShort'), onClick: () => setDashboardFilter('all', 'archive') },
+    { divider: true },
+    { label: t('filterRush'), onClick: () => setDashboardFilter('rush', 'active') },
+    { label: t('filterOverdue'), onClick: () => setDashboardFilter('overdue', 'active') },
+    { label: t('statusInProduction'), onClick: () => setDashboardFilter('in_production', 'active') },
+    { label: t('statusReadyPickup'), onClick: () => setDashboardFilter('ready_pickup', 'active') },
+    { label: t('reworkN'), onClick: () => setDashboardFilter('rework', 'active') },
+  ]);
 });
 document.getElementById('search').addEventListener('input', () => {
   clearTimeout(searchDebounce);
@@ -178,29 +525,31 @@ document.getElementById('search').addEventListener('input', () => {
   }, 220);
 });
 
-function onLangChange() { updatePageTitle(); renderAlerts(allOrders); renderList(); }
+function onLangChange() { updatePageTitle(); renderAlerts(); renderList(); }
 
 function updatePageTitle() {
   const title = document.getElementById('pageTitle');
   if (title) {
-    title.dataset.i18n = archiveMode ? 'archivedOrdersTitle' : 'orderOverview';
-    title.textContent = archiveMode ? t('archivedOrdersTitle') : t('orderOverview');
+    title.dataset.i18n = viewMode === 'archive' ? 'archivedOrdersTitle' : 'orderOverview';
+    title.textContent = viewMode === 'archive' ? t('archivedOrdersTitle') : t('orderOverview');
   }
 }
 
 function loadOrdersOrError() {
-  loadOrders().catch(err => {
+  const seq = ++dashboardLoadSeq;
+  const shouldBlock = !firstLoad;
+  const run = () => loadOrders(seq).catch(err => {
+    if (seq !== dashboardLoadSeq) return;
     document.getElementById('list').innerHTML = errorState(err.message, t('retry'), loadOrdersOrError);
     toast(err.message, { type: 'danger' });
   });
+  return shouldBlock ? withGlobalLoader(run, { minMs: 260 }) : run();
 }
 
 if (pageAllowed) {
   injectBossNav('orders');
-  const archiveLink = document.getElementById('archiveFilter');
-  archiveLink.classList.toggle('active', archiveMode);
-  archiveLink.href = archiveMode ? 'boss-dashboard.html' : 'boss-dashboard.html?archived=1';
-  document.querySelector('[data-filter="all"]').classList.toggle('active', !archiveMode);
+  bindOrderListGestures();
+  renderFilterState();
   updatePageTitle();
   loadOrdersOrError();
   window.addEventListener('offline', () => toast(t('networkError'), { type: 'danger' }));

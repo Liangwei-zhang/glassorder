@@ -63,17 +63,19 @@ code=$(curl -s -o "$tmp/xss-customer.json" -w '%{http_code}' \
 status "$code" 201 "xss customer create"
 
 # --- Q2 invalid customer_id should 400 and clean up --------------------------
-PRE_PDF=$(ls "$(dirname "$0")/../uploads/pdfs" 2>/dev/null | wc -l | tr -d ' ')
+BAD_CUSTOMER_PDF="bad-customer-$RANDOM-$(date +%s%N).pdf"
 code=$(curl -s -o "$tmp/order-bad-cust.json" -w '%{http_code}' \
   "${AUTH[@]}" \
   -F "customer_id=99999" \
   -F "priority=normal" \
-  -F "pdf=@$TEST_PDF;type=application/pdf" \
+  -F "pdf=@$TEST_PDF;filename=$BAD_CUSTOMER_PDF;type=application/pdf" \
   "$BASE/api/orders")
 status "$code" 400 "order invalid customer_id"
-POST_PDF=$(ls "$(dirname "$0")/../uploads/pdfs" 2>/dev/null | wc -l | tr -d ' ')
-[ "$PRE_PDF" = "$POST_PDF" ] || { echo "FAIL pdf residue after invalid customer: $PRE_PDF -> $POST_PDF" >&2; exit 1; }
-echo "OK invalid customer cleanup (pdfs: $PRE_PDF)"
+if find "$(dirname "$0")/../uploads/pdfs" -maxdepth 1 -type f -name "*$BAD_CUSTOMER_PDF" | grep -q .; then
+  echo "FAIL pdf residue after invalid customer filename: $BAD_CUSTOMER_PDF" >&2
+  exit 1
+fi
+echo "OK invalid customer cleanup ($BAD_CUSTOMER_PDF)"
 
 # --- Q2 non-pdf upload should 400 -------------------------------------------
 echo "hello" > "$tmp/not-a-pdf.txt"
@@ -104,17 +106,19 @@ PIECE4="$(json_field '.pieces[3].size' < "$tmp/order.json")"
 echo "OK pdf parsed: 8 pieces, piece4=$PIECE4"
 
 # --- P3-T1 same source PDF must not be uploaded twice -----------------------
-PRE_DUP_PDF=$(ls "$(dirname "$0")/../uploads/pdfs" 2>/dev/null | wc -l | tr -d ' ')
+DUP_PDF="duplicate-$RANDOM-$(date +%s%N).pdf"
 code=$(curl -s -o "$tmp/order-dup.json" -w '%{http_code}' \
   "${AUTH[@]}" \
   -F "customer_id=$CID" \
   -F "priority=normal" \
-  -F "pdf=@$TEST_PDF;type=application/pdf" \
+  -F "pdf=@$TEST_PDF;filename=$DUP_PDF;type=application/pdf" \
   "$BASE/api/orders")
 status "$code" 409 "duplicate pdf rejected"
-POST_DUP_PDF=$(ls "$(dirname "$0")/../uploads/pdfs" 2>/dev/null | wc -l | tr -d ' ')
-[ "$PRE_DUP_PDF" = "$POST_DUP_PDF" ] || { echo "FAIL pdf residue after duplicate: $PRE_DUP_PDF -> $POST_DUP_PDF" >&2; exit 1; }
-echo "OK duplicate pdf cleanup (pdfs: $PRE_DUP_PDF)"
+if find "$(dirname "$0")/../uploads/pdfs" -maxdepth 1 -type f -name "*$DUP_PDF" | grep -q .; then
+  echo "FAIL pdf residue after duplicate filename: $DUP_PDF" >&2
+  exit 1
+fi
+echo "OK duplicate pdf cleanup ($DUP_PDF)"
 
 code=$(curl -s -o "$tmp/detail.json" -w '%{http_code}' "${AUTH[@]}" "$BASE/api/orders/$OID")
 status "$code" 200 "order detail"

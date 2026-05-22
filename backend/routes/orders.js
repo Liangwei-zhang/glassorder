@@ -9,6 +9,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { parsePdf } = require('../services/pdfParser');
 const { createPickupSlip } = require('../services/slipPdf');
 const { sendPickupEmail } = require('../services/mailer');
+const { decodePngSignature } = require('../services/signature');
 const {
   completedStepsJSON,
   hydratePieceWorkflow,
@@ -18,9 +19,13 @@ const {
 const { decorateOrder, syncOrderStatusFromPieces } = require('../services/orderStatus');
 
 const router = express.Router();
+const ALLOWED_PRIORITIES = new Set(['normal', 'rush', 'rework']);
 
-const pdfDir = path.join(__dirname, '..', 'uploads', 'pdfs');
-const orderUploadsDir = path.join(__dirname, '..', 'uploads', 'orders');
+const uploadsBase = (db.runtime && db.runtime.uploadsBase)
+  ? db.runtime.uploadsBase
+  : path.join(__dirname, '..', 'uploads');
+const pdfDir = path.join(uploadsBase, 'pdfs');
+const orderUploadsDir = path.join(uploadsBase, 'orders');
 fs.mkdirSync(pdfDir, { recursive: true });
 fs.mkdirSync(orderUploadsDir, { recursive: true });
 
@@ -153,7 +158,147 @@ function queryString(value) {
   return String(value || '').trim();
 }
 
-router.get('/', (req, res) => {
+function compactSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function compactSql(expr) {
+  const base = `LOWER(COALESCE(${expr}, ''))`;
+  return [
+    ['-', ''],
+    [' ', ''],
+    ['#', ''],
+    ['/', ''],
+    ['.', ''],
+    ['_', ''],
+    ['(', ''],
+    [')', ''],
+    ['+', ''],
+  ].reduce((sql, [from, to]) => `REPLACE(${sql}, '${from}', '${to}')`, base);
+}
+
+function addFuzzySearch(where, params, search) {
+  const tokens = String(search || '').trim().split(/\s+/).filter(Boolean).slice(0, 6);
+  if (!tokens.length) return;
+  const rawFields = [
+    'o.order_number',
+    'o.project_name',
+    'o.deadline',
+    'o.note',
+    'c.company',
+    'c.contact_name',
+    'c.phone',
+    'c.email',
+  ];
+  const compactFields = [
+    'o.order_number',
+    'o.project_name',
+    'c.company',
+    'c.contact_name',
+    'c.phone',
+    'c.email',
+  ];
+  tokens.forEach((token, index) => {
+    const key = `search_${index}`;
+    const normKey = `search_norm_${index}`;
+    params[key] = `%${token.toLowerCase()}%`;
+    const parts = rawFields.map((field) => `LOWER(COALESCE(${field}, '')) LIKE @${key}`);
+    const compact = compactSearch(token);
+    if (compact) {
+      params[normKey] = `%${compact}%`;
+      compactFields.forEach((field) => {
+        parts.push(`${compactSql(field)} LIKE @${normKey}`);
+      });
+    }
+    where.push(`(${parts.join(' OR ')})`);
+  });
+}
+
+function normalizePriority(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 'normal';
+  const priority = String(value).trim();
+  return ALLOWED_PRIORITIES.has(priority) ? priority : null;
+}
+
+function orderSummarySql(whereSql = '') {
+  return `
+    WITH piece_stats AS (
+      SELECT
+        order_id,
+        COUNT(*) AS total_pieces,
+        SUM(CASE WHEN stage = 'finished' THEN 1 ELSE 0 END) AS finished_pieces,
+        SUM(CASE WHEN rework = 1 THEN 1 ELSE 0 END) AS rework_pieces,
+        SUM(CASE WHEN broken = 1 THEN 1 ELSE 0 END) AS broken_pieces,
+        SUM(CASE WHEN picked_up_at IS NOT NULL THEN 1 ELSE 0 END) AS picked_pieces
+      FROM pieces
+      GROUP BY order_id
+    ),
+    scoped_orders AS (
+      SELECT
+        o.*,
+        c.company,
+        COALESCE(ps.total_pieces, 0) AS total_pieces,
+        COALESCE(ps.finished_pieces, 0) AS finished_pieces,
+        COALESCE(ps.rework_pieces, 0) AS rework_pieces,
+        COALESCE(ps.broken_pieces, 0) AS broken_pieces,
+        COALESCE(ps.picked_pieces, 0) AS picked_pieces
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN piece_stats ps ON ps.order_id = o.id
+      ${whereSql}
+    )
+    SELECT
+      COUNT(*) AS total_orders,
+      SUM(CASE WHEN status = 'in_production' THEN 1 ELSE 0 END) AS in_production_orders,
+      SUM(CASE WHEN status = 'ready_pickup' THEN 1 ELSE 0 END) AS ready_pickup_orders,
+      SUM(CASE WHEN status = 'picked_up' THEN 1 ELSE 0 END) AS picked_up_orders,
+      SUM(CASE WHEN priority = 'rush' THEN 1 ELSE 0 END) AS rush_orders,
+      SUM(CASE
+        WHEN archived_at IS NULL
+          AND deadline IS NOT NULL
+          AND deadline < date('now', 'localtime')
+          AND status NOT IN ('ready_pickup', 'picked_up')
+        THEN 1 ELSE 0
+      END) AS overdue_orders,
+      SUM(rework_pieces) AS rework_pieces,
+      SUM(CASE WHEN rework_pieces > 0 THEN 1 ELSE 0 END) AS rework_orders,
+      SUM(total_pieces) AS total_pieces,
+      SUM(finished_pieces) AS finished_pieces,
+      SUM(picked_pieces) AS picked_pieces
+    FROM scoped_orders
+  `;
+}
+
+function normalizeStats(row) {
+  const keys = [
+    'total_orders',
+    'in_production_orders',
+    'ready_pickup_orders',
+    'picked_up_orders',
+    'rush_orders',
+    'overdue_orders',
+    'rework_pieces',
+    'rework_orders',
+    'total_pieces',
+    'finished_pieces',
+    'picked_pieces',
+  ];
+  return keys.reduce((out, key) => {
+    out[key] = Number((row && row[key]) || 0);
+    return out;
+  }, {});
+}
+
+router.get('/stats', requireRole('boss'), (req, res) => {
+  const archivedMode = queryString(req.query.archived) === '1';
+  const whereSql = archivedMode ? 'WHERE o.archived_at IS NOT NULL' : 'WHERE o.archived_at IS NULL';
+  const stats = normalizeStats(db.prepare(orderSummarySql(whereSql)).get());
+  res.json({ stats, scope: archivedMode ? 'archive' : 'active' });
+});
+
+router.get('/', requireRole('boss'), (req, res) => {
   const page = safeInt(req.query.page, 1, 1);
   const limit = safeInt(req.query.limit, 50, 1, 100);
   const offset = (page - 1) * limit;
@@ -178,10 +323,22 @@ router.get('/', (req, res) => {
     where.push('o.priority = @priority');
     params.priority = priority;
   }
+  const filter = queryString(req.query.filter);
+  if (filter === 'overdue') {
+    where.push("o.deadline IS NOT NULL AND o.deadline < date('now', 'localtime') AND o.status NOT IN ('ready_pickup', 'picked_up') AND o.archived_at IS NULL");
+  } else if (filter === 'rework') {
+    where.push(`EXISTS (
+      SELECT 1
+      FROM pieces rp
+      WHERE rp.order_id = o.id
+        AND rp.rework = 1
+    )`);
+  } else if (filter) {
+    return res.status(400).json({ error: 'filter is invalid' });
+  }
   const search = queryString(req.query.search);
   if (search) {
-    where.push('(o.order_number LIKE @search OR o.project_name LIKE @search OR c.company LIKE @search)');
-    params.search = `%${search}%`;
+    addFuzzySearch(where, params, search);
   }
   const orderNumber = queryString(req.query.order_number);
   if (orderNumber) {
@@ -207,7 +364,7 @@ router.get('/', (req, res) => {
   res.json({ orders, page, limit, total });
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', requireRole('boss'), (req, res) => {
   const order = getOrderWithPieces(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   res.json({ order });
@@ -218,8 +375,7 @@ router.patch('/:id', requireRole('boss'), (req, res) => {
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
   const patch = req.body || {};
-  const allowedPriority = new Set(['normal', 'rush', 'rework']);
-  if (patch.priority !== undefined && !allowedPriority.has(patch.priority)) {
+  if (patch.priority !== undefined && !ALLOWED_PRIORITIES.has(patch.priority)) {
     return res.status(400).json({ error: 'priority is invalid' });
   }
   if (patch.customer_id !== undefined) {
@@ -324,12 +480,12 @@ router.post('/:id/pickup', requireRole('boss'), async (req, res, next) => {
     const signatureBase64 = String(req.body.signature_base64 || '').trim();
     if (!signatureBase64) return res.status(400).json({ error: 'signature_base64 is required' });
 
-    const base64 = signatureBase64.replace(/^data:image\/png;base64,/, '');
-    const signatureBuffer = Buffer.from(base64, 'base64');
-    if (!signatureBuffer.length) return res.status(400).json({ error: 'signature_base64 is invalid' });
+    const decodedSignature = decodePngSignature(signatureBase64);
+    if (decodedSignature.error) return res.status(400).json({ error: decodedSignature.error });
+    const signatureBuffer = decodedSignature.buffer;
 
-    const signatureDir = path.join(__dirname, '..', 'uploads', 'signatures');
-    const slipDir = path.join(__dirname, '..', 'uploads', 'slips');
+    const signatureDir = path.join(uploadsBase, 'signatures');
+    const slipDir = path.join(uploadsBase, 'slips');
     fs.mkdirSync(signatureDir, { recursive: true });
     fs.mkdirSync(slipDir, { recursive: true });
 
@@ -421,7 +577,7 @@ router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
   if (!pickup) return res.status(400).json({ error: 'No pickup slip exists for this order' });
   if (!order.customer_email) return res.status(400).json({ error: 'Customer email is missing' });
 
-  const slipPath = path.join(__dirname, '..', pickup.slip_pdf_path.replace(/^\/uploads\//, 'uploads/'));
+  const slipPath = path.join(uploadsBase, pickup.slip_pdf_path.replace(/^\/uploads\//, ''));
   if (!fs.existsSync(slipPath)) return res.status(400).json({ error: 'Pickup slip file is missing' });
   const mail = sendPickupEmail({ order, slipPath, to: order.customer_email });
   insertEvent(order.id, null, req.user.id, 'pickup_slip_sent', {
@@ -486,6 +642,8 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
     const customerId = Number(req.body.customer_id);
     const customer = db.prepare('SELECT id FROM customers WHERE id = ?').get(customerId);
     if (!customer) fail(400, 'customer_id is invalid');
+    const priority = normalizePriority(req.body.priority);
+    if (!priority) fail(400, 'priority is invalid');
 
     const tempName = `tmp-${randomUUID()}`;
     tempOutputDir = path.join(orderUploadsDir, tempName);
@@ -519,7 +677,7 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
         order_number: orderNumber,
         customer_id: customerId,
         project_name: req.body.project_name || parsed.projectName || null,
-        priority: req.body.priority || 'normal',
+        priority,
         deadline: req.body.deadline || null,
         pdf_path: `/uploads/pdfs/${path.basename(req.file.path)}`,
         note: req.body.note || null,

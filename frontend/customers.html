@@ -4,18 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Customers</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
   <div class="topbar-title" data-i18n="customerManagement">客户管理</div>
+  <button class="topbar-action select-btn" id="toggleForm" type="button" data-i18n="addCustomerShort">新增</button>
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
-<div class="center-col page-pad-bottom" style="padding: 16px;">
-  <button class="add-trigger" id="toggleForm" type="button">
-    <span data-i18n="addCustomer">+ 新增客户</span>
-  </button>
+<div class="content-shell page-pad-bottom">
+  <div class="card">
+    <label class="form-label" data-i18n="customerSearchLabel">搜索客户</label>
+    <input class="form-input" id="customerSearch" type="search" autocomplete="off" data-i18n-placeholder="customerSearchPlaceholder" placeholder="输入公司 / 联系人 / 电话 / 邮箱">
+    <div class="row-sub" id="customerSearchMeta" style="margin-top:8px;"></div>
+  </div>
 
   <form class="card collapsed-form" id="form" style="margin-top: 12px;">
     <input type="hidden" id="id">
@@ -43,23 +46,19 @@
 
   <div id="customerQuickStats" class="customer-quick-stats"></div>
 
-  <div class="card" style="margin-top:12px;">
-    <label class="form-label" data-i18n="customerSearchLabel">搜索客户</label>
-    <input class="form-input" id="customerSearch" type="search" autocomplete="off" data-i18n-placeholder="customerSearchPlaceholder" placeholder="输入公司 / 联系人 / 电话 / 邮箱">
-    <div class="row-sub" id="customerSearchMeta" style="margin-top:8px;"></div>
-  </div>
-
-  <div id="list" class="card" style="padding:0; overflow:hidden; margin-top: 12px;"></div>
+  <div class="list-hint" data-i18n="customerListHint">默认按最近业务排序，可用上方搜索快速定位</div>
+  <div id="list" class="section-panel customer-list-panel"></div>
 </div>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 let customers = [];
 let firstLoad = true;
 let customerQuery = '';
 let highlightedCustomerId = null;
+let filteredCustomers = [];
 
 const formEl = document.getElementById('form');
 const triggerEl = document.getElementById('toggleForm');
@@ -79,11 +78,11 @@ document.getElementById('cancelBtn').addEventListener('click', () => {
   clearForm();
   setFormOpen(false);
 });
-searchEl.addEventListener('input', (e) => {
+searchEl.addEventListener('input', debounce((e) => {
   customerQuery = e.target.value;
   highlightedCustomerId = null;
   renderList();
-});
+}, 120));
 
 async function loadCustomers() {
   if (firstLoad) {
@@ -175,21 +174,21 @@ function focusCustomer(id) {
 
 function renderList() {
   const list = document.getElementById('list');
-  const rows = customerQuery
+  filteredCustomers = customerQuery
     ? customers.filter(c => customerSearchText(c).includes(normText(customerQuery)))
     : customers;
   document.getElementById('customerSearchMeta').textContent = customers.length
-    ? tn('customerSearchResultCount', { shown: rows.length, total: customers.length })
+    ? tn('customerSearchResultCount', { shown: filteredCustomers.length, total: customers.length })
     : '';
   if (!customers.length) {
     list.innerHTML = emptyState(t('customersEmpty'));
     return;
   }
-  if (!rows.length) {
+  if (!filteredCustomers.length) {
     list.innerHTML = emptyState(t('customerSearchEmpty'));
     return;
   }
-  list.innerHTML = rows.map(c => {
+  list.innerHTML = filteredCustomers.map(c => {
     const hasEmail = !!c.email;
     return `
     <div class="row ${Number(highlightedCustomerId) === Number(c.id) ? 'customer-row-highlight' : ''}" data-cid="${c.id}">
@@ -198,10 +197,11 @@ function renderList() {
         <div class="row-sub">${esc(c.contact_name || '—')} · ${esc(c.phone || t('noPhone'))} · ${esc(c.email || t('noEmail'))}</div>
         <div class="row-sub customer-business-line">${esc(customerBusinessLine(c))}</div>
       </div>
-      <button class="btn btn-primary" style="padding:9px 12px; min-height:0; font-size:13px; ${hasEmail ? '' : 'opacity:.45;'}" onclick="sendCustomerSlip(${c.id}, this)">${esc(t('emailSlip'))}</button>
+      <button class="btn btn-primary btn-inline-compact" style="${hasEmail ? '' : 'opacity:.45;'}" onclick="sendCustomerSlip(${c.id}, this)">${esc(t('emailSlip'))}</button>
       <button class="menu-trigger" type="button" onclick="customerMenu(event, ${c.id})" aria-label="more">⋯</button>
     </div>`;
   }).join('');
+  scheduleMotion(list);
 }
 
 function customerBusinessLine(c) {

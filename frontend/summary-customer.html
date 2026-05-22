@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Customer Summary</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -12,15 +12,15 @@
   <div class="topbar-title" id="title" data-i18n="customerStatement">客户对账</div>
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
-<div class="center-col" style="padding:16px 16px 110px;">
+<div class="content-shell action-space">
   <div id="body"></div>
 </div>
 <div class="action-bar">
   <a class="btn btn-ghost back" href="summary.html" data-i18n="back">返回</a>
   <button class="btn btn-primary" onclick="window.print()" data-i18n="printBtn">打印</button>
 </div>
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const allowed = requireRolePage('boss');
 const id = new URLSearchParams(location.search).get('id');
@@ -31,33 +31,53 @@ async function loadCustomerSummary() {
 }
 function render() {
   if (!data) return;
+  const totals = (data.orders || []).reduce((sum, order) => {
+    sum.orders += 1;
+    sum.pieces += Number(order.total_pieces || 0);
+    sum.picked += Number(order.picked_pieces || 0);
+    sum.unpicked += Number(order.unpicked_pieces || 0);
+    return sum;
+  }, { orders: 0, pieces: 0, picked: 0, unpicked: 0 });
+  const batches = data.batches || [];
   document.getElementById('title').textContent = data.customer.company;
   document.getElementById('body').innerHTML = `
-    <div class="card" style="margin-bottom:12px;">
+    <div class="card flow-card">
       <div class="row-title">${esc(data.customer.company)}</div>
       <div class="row-sub">${esc(data.customer.contact_name || '')} · ${esc(data.customer.phone || t('noPhone'))} · ${esc(data.customer.email || t('noEmail'))}</div>
     </div>
-    <div class="card" style="padding:0; overflow:hidden; margin-bottom:12px;">
-      <div style="padding:12px 14px; font-weight:700;">${esc(t('orders'))}</div>
+    ${renderStatCells([
+      { value: totals.orders, label: t('orders') },
+      { value: totals.picked, label: t('pickedPieces'), tone: 'info' },
+      { value: totals.unpicked, label: t('unpickedPieces'), tone: totals.unpicked ? 'warn' : '' },
+      { value: batches.length, label: t('pickupBatches') },
+    ], { className: 'metrics-grid customer-statement-stats' })}
+    ${renderPanel({
+      title: t('orders'),
+      meta: tn('ordersPiecesN', { orders: totals.orders, pieces: totals.pieces }),
+      body: `
       ${(data.orders || []).map(o => `
         <div class="row">
-          <div style="flex:1;">
+          <div class="row-copy-grow">
             <div class="row-title">#${esc(o.order_number)} · ${esc(orderStatusLabel(o))}</div>
             <div class="row-sub">${esc(o.project_name || '')} · ${esc(t('totalPieces'))} ${o.total_pieces} · ${esc(t('pickedPieces'))} ${o.picked_pieces} · ${esc(t('unpickedPieces'))} ${o.unpicked_pieces}</div>
           </div>
-        </div>`).join('')}
-    </div>
-    <div class="card" style="padding:0; overflow:hidden;">
-      <div style="padding:12px 14px; font-weight:700;">${esc(t('pickupBatches'))}</div>
-      ${(data.batches || []).map(b => `
+        </div>`).join('')}`,
+      className: 'pickup-order-panel',
+    })}
+    ${renderPanel({
+      title: t('pickupBatches'),
+      meta: tn('pickupBatchCountN', { n: batches.length }),
+      body: `
+      ${batches.map(b => `
         <a class="row" href="pickup-batch-detail.html?id=${b.id}">
-          <div style="flex:1;">
+          <div class="row-copy-grow">
             <div class="row-title">${esc(b.batch_number)}</div>
             <div class="row-sub">${esc(relativeTime(b.picked_at))} · ${esc(tn('piecesShortN', { n: Number(b.active_items || 0) }))}</div>
           </div>
           <div style="color:var(--text-3); font-size:20px;">›</div>
-        </a>`).join('') || `<div style="padding:16px; color:var(--text-3);">${esc(t('noPickupBatches'))}</div>`}
-    </div>`;
+        </a>`).join('') || `<div class="section-empty-line">${esc(t('noPickupBatches'))}</div>`}`,
+      className: 'pickup-order-panel',
+    })}`;
 }
 function orderStatusLabel(order) {
   if (order.pickup_status === 'partial') return t('statusPartialPickup');

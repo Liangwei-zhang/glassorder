@@ -71,7 +71,12 @@ async function createQaOrder(session) {
     headers: { ...authHeaders(session), 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'complete', piece_ids: pieceIds }),
   });
-  return { orderId, customerId: customer.customer.id };
+  return {
+    orderId,
+    customerId: customer.customer.id,
+    orderNumber: created.order.order_number,
+    company: customer.customer.company,
+  };
 }
 
 async function seedSession(page, session, roleUser) {
@@ -114,6 +119,14 @@ async function drawSignature(page) {
     await page.dispatchEvent('#sig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
   }
   await page.dispatchEvent('#sig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+}
+
+async function dashboardStatValues(page) {
+  await page.waitForTimeout(820);
+  return page.evaluate(() => (
+    [...document.querySelectorAll('.dashboard-stats .num-big')]
+      .map((el) => (el.dataset.countAnimated || el.textContent || '').trim())
+  ));
 }
 
 async function main() {
@@ -159,6 +172,151 @@ async function main() {
 
       await seedSession(page, session);
 
+      // Dashboard fuzzy search: order numbers should match even when separators are omitted.
+      await page.goto(BASE + '/boss-dashboard.html', { waitUntil: 'networkidle' });
+      const dashboardStatsBeforeSearch = await dashboardStatValues(page);
+      const compactOrderSearch = seeded.orderNumber.replace(/[^0-9A-Za-z]/g, '');
+      const searchResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('search') === compactOrderSearch
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      await page.fill('#search', compactOrderSearch);
+      await searchResponse;
+      await page.waitForFunction((orderNumber) => {
+        const rows = [...document.querySelectorAll('#list .row')];
+        return rows.length === 1 && rows[0].textContent.includes(orderNumber);
+      }, seeded.orderNumber, { timeout: 10000 });
+      const dashboardSearchQa = await page.evaluate((orderNumber) => {
+        const rows = [...document.querySelectorAll('#list .row')];
+        const stats = [...document.querySelectorAll('.dashboard-stats .num-big')]
+          .map((el) => (el.dataset.countAnimated || el.textContent || '').trim());
+        return {
+          count: rows.length,
+          hasTarget: rows.some((row) => row.textContent.includes(orderNumber)),
+          stats,
+          text: document.querySelector('#list')?.textContent || '',
+        };
+      }, seeded.orderNumber);
+      if (!dashboardSearchQa.hasTarget || dashboardSearchQa.count !== 1) {
+        throw new Error(`dashboard fuzzy order search failed: ${JSON.stringify(dashboardSearchQa)}`);
+      }
+      if (JSON.stringify(dashboardSearchQa.stats) !== JSON.stringify(dashboardStatsBeforeSearch)) {
+        throw new Error(`dashboard stats changed during search: ${JSON.stringify({ before: dashboardStatsBeforeSearch, after: dashboardSearchQa.stats })}`);
+      }
+      checks.push('Dashboard fuzzy order search');
+
+      // Dashboard filters: stats act as shortcuts and the dense filter row is collapsed.
+      const dashboardFilterQa = await page.evaluate(() => ({
+        visibleFilters: [...document.querySelectorAll('.dashboard-filter-bar .filter-btn')].map((btn) => btn.textContent.trim()),
+        statShortcuts: [...document.querySelectorAll('[data-quick-filter]')].map((btn) => btn.dataset.quickFilter),
+        priorityCards: document.querySelectorAll('.dashboard-task-card').length,
+        overflow: document.documentElement.scrollWidth - window.innerWidth,
+      }));
+      if (dashboardFilterQa.visibleFilters.length !== 3
+        || !dashboardFilterQa.visibleFilters.some((label) => /已取货|Picked Up/i.test(label))
+        || !dashboardFilterQa.visibleFilters.some((label) => /筛选|Filter/i.test(label))
+        || !dashboardFilterQa.statShortcuts.includes('ready_pickup')
+        || dashboardFilterQa.priorityCards < 1
+        || dashboardFilterQa.overflow > 2) {
+        throw new Error(`dashboard collapsed filters failed: ${JSON.stringify(dashboardFilterQa)}`);
+      }
+      await page.locator('#moreFilterBtn').click();
+      const secondaryFilters = await page.locator('.menu-pop button').evaluateAll((buttons) => buttons.map((btn) => btn.textContent.trim()));
+      if (!secondaryFilters.some((label) => /归档|Archive/i.test(label))
+        || !secondaryFilters.some((label) => /加急|Rush/i.test(label))
+        || !secondaryFilters.some((label) => /逾期|Overdue/i.test(label))
+        || !secondaryFilters.some((label) => /生产中|In Production/i.test(label))
+        || !secondaryFilters.some((label) => /可取货|Ready for Pickup/i.test(label))
+        || !secondaryFilters.some((label) => /待补片|Rework/i.test(label))) {
+        throw new Error(`dashboard secondary filters missing expected actions: ${JSON.stringify(secondaryFilters)}`);
+      }
+      await page.keyboard.press('Escape');
+      const quickPickupResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('status') === 'ready_pickup'
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      await page.locator('[data-quick-filter="ready_pickup"]').click();
+      await quickPickupResponse;
+      const quickPickupActive = await page.locator('[data-quick-filter="ready_pickup"]').evaluate((el) => el.classList.contains('active'));
+      if (!quickPickupActive) throw new Error('ready pickup stat shortcut did not become active');
+      const beforeFilterStats = await dashboardStatValues(page);
+      await page.locator('[data-quick-filter="in_production"]').click();
+      await page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('status') === 'in_production'
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      const afterProductionStats = await dashboardStatValues(page);
+      await page.locator('[data-quick-filter="ready_pickup"]').click();
+      await page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('status') === 'ready_pickup'
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      const afterReadyStats = await dashboardStatValues(page);
+      await page.locator('[data-quick-filter="rework"]').click();
+      await page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('filter') === 'rework'
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      const afterReworkStats = await dashboardStatValues(page);
+      const dashboardStatsStable = {
+        before: beforeFilterStats,
+        afterProduction: afterProductionStats,
+        afterReady: afterReadyStats,
+        afterRework: afterReworkStats,
+      };
+      const stableJson = JSON.stringify(dashboardStatsStable.before);
+      if (JSON.stringify(dashboardStatsStable.afterProduction) !== stableJson
+        || JSON.stringify(dashboardStatsStable.afterReady) !== stableJson
+        || JSON.stringify(dashboardStatsStable.afterRework) !== stableJson) {
+        throw new Error(`dashboard stats changed across filters: ${JSON.stringify(dashboardStatsStable)}`);
+      }
+      checks.push('Dashboard collapsed filter UX');
+
+      await page.goto(BASE + '/boss-dashboard.html', { waitUntil: 'networkidle' });
+
+      // Dashboard long-press menu: list row exposes the detail-page quick actions.
+      const row = page.locator(`.order-row[data-order-id="${seeded.orderId}"]`);
+      const rowBox = await row.boundingBox();
+      if (!rowBox) throw new Error('dashboard order row missing for long-press menu');
+      const longPressPoint = { clientX: rowBox.x + rowBox.width / 2, clientY: rowBox.y + rowBox.height / 2 };
+      await row.dispatchEvent('pointerdown', {
+        ...longPressPoint,
+        pointerId: 7,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+      });
+      await page.waitForSelector('.menu-pop button', { timeout: 10000 });
+      await row.dispatchEvent('pointerup', {
+        ...longPressPoint,
+        pointerId: 7,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 0,
+      });
+      const menuLabels = await page.locator('.menu-pop button').evaluateAll((buttons) => buttons.map((btn) => btn.textContent.trim()));
+      if (!menuLabels.some((label) => /修改订单|Edit order/i.test(label))
+        || !menuLabels.some((label) => /通知可取货|Mark Ready/i.test(label))
+        || !menuLabels.some((label) => /订单详情|Order Detail/i.test(label))) {
+        throw new Error(`dashboard long-press menu missing expected actions: ${JSON.stringify(menuLabels)}`);
+      }
+      await page.locator('.menu-pop button', { hasText: /修改订单|Edit order/i }).click();
+      await page.waitForSelector('#dashboardEditModal.open');
+      await page.locator('#dashboardEditModal .btn-ghost').click();
+      checks.push('Dashboard long-press order menu');
+
       // Q4 boss ready confirmation modal.
       await page.goto(BASE + `/boss-order-detail.html?id=${seeded.orderId}`, { waitUntil: 'networkidle' });
       await page.locator('button', { hasText: /通知可取货|Mark Ready/ }).click();
@@ -170,6 +328,10 @@ async function main() {
       await page.locator('.modal-backdrop.open [data-role="ok"]').click();
       await page.waitForSelector('.modal-backdrop.open', { state: 'detached' });
       await page.waitForFunction(() => document.body.textContent.includes('调出取货签字') || document.body.textContent.includes('Pickup Sign'));
+      const pickupHref = await page.locator('#actions a.btn-success').getAttribute('href');
+      if (!pickupHref || !pickupHref.includes(`pickup-search.html?order_id=${seeded.orderId}`)) {
+        throw new Error(`Q4 detail pickup action should use piece-level pickup flow, got ${pickupHref}`);
+      }
       checks.push('Q4 ready confirm modal');
 
       // Q6 worker grid: readable piece sizes, logout visible, no horizontal overflow.
@@ -186,8 +348,16 @@ async function main() {
       }
       checks.push('Q6 worker grid');
 
-      // Q4 pickup confirmation modal.
+      // Q4 pickup confirmation modal: detail action and legacy pickup-sign route must both land in piece-level pickup flow.
       await page.goto(BASE + `/pickup-sign.html?id=${seeded.orderId}`, { waitUntil: 'networkidle' });
+      await page.waitForURL(new RegExp(`pickup-search\\.html\\?order_id=${seeded.orderId}$`), { timeout: 10000 });
+      await page.waitForSelector('[data-piece]');
+      const piecesFromLegacy = await page.locator('[data-piece]').count();
+      if (piecesFromLegacy !== 8) throw new Error(`legacy pickup-sign redirect should show 8 selectable pieces, got ${piecesFromLegacy}`);
+      await page.locator('[data-piece]').nth(0).check();
+      await page.waitForFunction(() => /已选 1 片|1 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
+      await page.locator('[data-piece]').nth(2).check();
+      await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
       await page.fill('#name', 'Browser QA Signer');
       await page.fill('#phone', '403-555-1212');
       await drawSignature(page);
@@ -198,24 +368,93 @@ async function main() {
         throw new Error('Q4 pickup confirmation modal missing');
       }
       await page.locator('.modal-backdrop.open [data-role="ok"]').click();
-      await page.waitForURL(/pickup-slip\.html/, { timeout: 15000 });
-      checks.push('Q4 pickup confirm modal');
+      await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
+      const batchText = await page.locator('#body').textContent();
+      if (!/第 1 片|Piece #1/.test(batchText || '') || !/第 3 片|Piece #3/.test(batchText || '') || !/订单数|Orders/.test(batchText || '')) {
+        throw new Error('Q4 piece-level pickup batch detail missing selected pieces');
+      }
+      checks.push('Q4 piece-level pickup confirm modal');
 
-      // Q5 detail timeline + slip download after pickup.
+      // Q5 detail timeline after partial piece-level pickup.
       await page.goto(BASE + `/boss-order-detail.html?id=${seeded.orderId}`, { waitUntil: 'networkidle' });
       const detailText = await page.locator('#body').textContent();
-      const hasSlip = await page.locator('a[href^="/uploads/slips/"]').count();
-      if (!/事件时间线|Timeline/.test(detailText || '') || !/客户取货|Picked up/.test(detailText || '') || hasSlip < 1) {
-        throw new Error('Q5 timeline or slip card missing after pickup');
+      if (!/事件时间线|Timeline/.test(detailText || '') || !/片取货|Piece picked up/.test(detailText || '')) {
+        throw new Error('Q5 timeline missing piece-level pickup event');
       }
-      checks.push('Q5 timeline and slip');
+      checks.push('Q5 piece-level timeline');
 
-      // Q8 empty state style: selected customer has no remaining pickup pieces.
+      // Q8 piece-level pickup state: selected customer still has the unpicked pieces available.
       await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
       await page.fill('#customerPicker input[type="search"]', `Browser QA`);
       await page.locator(`.customer-picker-option[data-id="${seeded.customerId}"]`).click();
-      await page.waitForSelector('#available .empty-state');
-      checks.push('Q8 empty state');
+      await page.waitForSelector('#available [data-piece]');
+      const remainingPieces = await page.locator('#available [data-piece]').count();
+      if (remainingPieces !== 6) {
+        throw new Error(`Q8 expected 6 remaining pickup pieces after partial pickup, got ${remainingPieces}`);
+      }
+      checks.push('Q8 partial pickup remainder');
+
+      // Finish remaining pieces so the active orders page can expose it under the picked-up filter.
+      const remainingAvailable = await api(`/api/pickups/available?customer_id=${seeded.customerId}`, { headers: authHeaders(session) });
+      const remainingPieceIds = (remainingAvailable.pieces || [])
+        .filter((item) => Number(item.order_id) === Number(seeded.orderId))
+        .map((item) => item.id);
+      if (remainingPieceIds.length !== 6) {
+        throw new Error(`expected 6 remaining pieces before final pickup, got ${remainingPieceIds.length}`);
+      }
+      const finalPickup = await api('/api/pickups/batches', {
+        method: 'POST',
+        headers: { ...authHeaders(session), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_id: seeded.customerId,
+          piece_ids: remainingPieceIds,
+          signer_name: 'Browser QA Final',
+          signer_phone: '403-555-3434',
+          signature_base64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+        }),
+      });
+      if (!finalPickup.batch || !finalPickup.batch.items || finalPickup.batch.items.length !== 6) {
+        throw new Error(`final pickup batch failed: ${JSON.stringify(finalPickup)}`);
+      }
+
+      await page.goto(BASE + '/boss-dashboard.html', { waitUntil: 'networkidle' });
+      const pickedResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/orders'
+          && url.searchParams.get('status') === 'picked_up'
+          && response.status() === 200;
+      }, { timeout: 10000 });
+      await page.locator('[data-filter="picked_up"]').click();
+      await pickedResponse;
+      await page.waitForSelector(`.order-row[data-order-id="${seeded.orderId}"]`, { timeout: 10000 });
+      const pickedRow = page.locator(`.order-row[data-order-id="${seeded.orderId}"]`);
+      const pickedBox = await pickedRow.boundingBox();
+      if (!pickedBox) throw new Error('picked-up order row missing after filter');
+      const pickedLongPressPoint = { clientX: pickedBox.x + pickedBox.width / 2, clientY: pickedBox.y + pickedBox.height / 2 };
+      await pickedRow.dispatchEvent('pointerdown', {
+        ...pickedLongPressPoint,
+        pointerId: 8,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+      });
+      await page.waitForSelector('.menu-pop button', { timeout: 10000 });
+      await pickedRow.dispatchEvent('pointerup', {
+        ...pickedLongPressPoint,
+        pointerId: 8,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 0,
+      });
+      const pickedMenuLabels = await page.locator('.menu-pop button').evaluateAll((buttons) => buttons.map((btn) => btn.textContent.trim()));
+      if (!pickedMenuLabels.some((label) => /移入归档|Move to archive/i.test(label))
+        || !pickedMenuLabels.some((label) => /重发交割单|Resend Slip/i.test(label))) {
+        throw new Error(`picked-up long-press menu missing archive/slip actions: ${JSON.stringify(pickedMenuLabels)}`);
+      }
+      await page.keyboard.press('Escape');
+      checks.push('Dashboard picked-up filter and archive menu');
     });
   } finally {
     await browser.close();

@@ -1,9 +1,11 @@
 require('dotenv').config();
 
 const express = require('express');
+const fs = require('fs');
 const helmet = require('helmet');
 const path = require('path');
-require('./db');
+const db = require('./db');
+const { authenticate } = require('./middleware/auth');
 
 const authRoutes = require('./routes/auth');
 const customerRoutes = require('./routes/customers');
@@ -24,7 +26,43 @@ app.use(helmet({
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+const uploadsDir = db.runtime && db.runtime.uploadsBase
+  ? db.runtime.uploadsBase
+  : path.join(__dirname, 'uploads');
+app.use('/uploads', authenticate, (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  let rel = decodeURIComponent(String(req.url || '').split('?')[0].replace(/^\/+/, '')).replace(/\\/g, '/');
+  if (rel.startsWith('uploads/')) rel = rel.slice('uploads/'.length);
+  if (!rel) return res.status(404).json({ error: 'File not found' });
+  if (req.user.role !== 'boss' && !rel.startsWith('orders/')) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const filePath = path.resolve(uploadsDir, rel);
+  const root = path.resolve(uploadsDir);
+  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  if (!stat.isFile()) return res.status(404).json({ error: 'File not found' });
+
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Length', stat.size);
+  res.type(path.extname(filePath));
+  if (req.method === 'HEAD') return res.end();
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', () => {
+    if (!res.headersSent) res.status(500).json({ error: 'File unavailable' });
+    else res.destroy();
+  });
+  return stream.pipe(res);
+});
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });

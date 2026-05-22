@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Glass Factory Orders</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="center-col" style="padding: 48px 20px;">
@@ -17,6 +17,10 @@
     </div>
     <div class="title-tight" style="font-size: 26px; font-weight: 700;" data-i18n="appTitle">玻璃厂订单</div>
     <div style="color: var(--text-2); margin-top: 6px; font-size: 14px;" id="userLine" data-i18n="selectWorkstation">请选择工作台</div>
+    <div style="color:var(--text-2); margin-top: 6px; font-size: 13px;" data-app-line-browser="appBrowserLine" data-app-line-installed="appInstalledLine">建议安装到主屏幕，获得更接近原生应用的体验</div>
+    <div style="margin-top: 12px;" data-install-only-browser>
+      <button class="btn btn-ghost" type="button" onclick="launchInstallPrompt()" data-i18n="installApp">安装应用</button>
+    </div>
     <div style="margin-top: 18px;"><button class="lang-btn" type="button" onclick="toggleLang()" style="background:var(--surface-2); color:var(--text-1); padding:7px 14px; border-radius:var(--r-sm); border:none; font-weight:600; font-size:13px; cursor:pointer;">EN</button></div>
   </div>
 
@@ -75,8 +79,8 @@
     <a href="#" onclick="logout(); return false;" style="color:var(--text-3); text-decoration: none;" data-i18n="logoutLink">退出登录</a>
   </div>
 </div>
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 let onLangChange = null;
 if (ensureAuth()) {

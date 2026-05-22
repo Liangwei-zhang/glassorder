@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup Batches</title>
-<link rel="stylesheet" href="shared.css?v=20260521-pickup-tabs">
+<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
 </head>
 <body>
 <div class="topbar">
@@ -28,8 +28,8 @@
 
 <a class="fab" href="pickup-search.html" aria-label="new pickup" data-i18n-title="newPickupBatch">+</a>
 
-<script src="js/api.js?v=20260521-pickup-tabs"></script>
-<script src="js/i18n.js?v=20260521-pickup-tabs"></script>
+<script src="js/api.js?v=20260521-worker-context-card"></script>
+<script src="js/i18n.js?v=20260521-worker-context-card"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 if (pageAllowed) injectBossNav('pickup');
@@ -74,7 +74,7 @@ function render() {
   const el = document.getElementById('list');
   const statsEl = document.getElementById('stats');
   const readyOrderCount = readyOrders.length;
-  const unpickedPieces = readyOrders.reduce((sum, o) => sum + Number(o.unpicked_pieces || 0), 0);
+  const unpickedPieces = availablePieces.length;
   const activeItems = batches.reduce((sum, b) => sum + Number(b.active_items || 0), 0);
   const revertedItems = batches.reduce((sum, b) => sum + Number(b.reverted_items || 0), 0);
   statsEl.innerHTML = `

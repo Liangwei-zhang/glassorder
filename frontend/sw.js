@@ -3,10 +3,10 @@
  * - HTML pages: NETWORK-FIRST (always try server, fall back to cache only when offline).
  *   Reason: a stale HTML can ship a known bug or wrong role-routing.
  * - JS/CSS/icons: stale-while-revalidate (small, version-stable).
- * - Uploaded order drawings (/uploads/orders/): cache-first (immutable per upload path).
- * - API calls (/api/*) and pickup PDFs/signatures: network-only, never cached.
+ * - Uploaded artifacts (/uploads/*): network-only, never cached, because access is role-gated.
+ * - API calls (/api/*): network-only, never cached.
  */
-const VERSION = 'v23-2026-05-21-pickup-tabs';
+const VERSION = 'v43-2026-05-21-worker-context-card';
 const STATIC_CACHE = `glassorder-static-${VERSION}`;
 const ASSET_CACHE = `glassorder-assets-${VERSION}`;
 const PRECACHE_HTML = [
@@ -56,10 +56,7 @@ self.addEventListener('activate', (event) => {
 });
 
 function isApi(u) { return u.pathname.startsWith('/api/'); }
-function isPickupArtifact(u) {
-  return u.pathname.startsWith('/uploads/slips/') || u.pathname.startsWith('/uploads/signatures/');
-}
-function isOrderDrawing(u) { return u.pathname.startsWith('/uploads/orders/'); }
+function isUploadArtifact(u) { return u.pathname.startsWith('/uploads/'); }
 function isHtml(req, u) {
   if (req.mode === 'navigate') return true;
   if (req.destination === 'document') return true;
@@ -73,12 +70,7 @@ self.addEventListener('fetch', (event) => {
   try { url = new URL(req.url); } catch (e) { return; }
   if (url.origin !== self.location.origin) return;
 
-  if (isApi(url) || isPickupArtifact(url)) return; // network-only
-
-  if (isOrderDrawing(url)) {
-    event.respondWith(cacheFirst(req, ASSET_CACHE));
-    return;
-  }
+  if (isApi(url) || isUploadArtifact(url)) return; // network-only
 
   if (isHtml(req, url)) {
     event.respondWith(networkFirst(req, STATIC_CACHE));

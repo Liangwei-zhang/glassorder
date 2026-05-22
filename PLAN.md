@@ -1620,3 +1620,807 @@ node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/
   - `node scripts/motion-browser-qa.js` ✅
   - `./scripts/smoke.sh` ✅
   - `node scripts/perf-check-worker.js` ✅
+
+## Phase 21：顶级动效性能安全打磨与全面 QA（2026-05-21）
+
+### 需求
+继续提升前端动效质感，但不能因为动画导致老板查单、取货查询、工人点片出现卡顿。
+
+### 任务
+- 将全局动效改成性能分级：
+  - `prefers-reduced-motion: reduce` 时完全不强行动画。
+  - 低配设备或省流量模式走 `motion-lite`。
+  - 其他设备走 `motion-premium`。
+- 列表/卡片入场改为 `IntersectionObserver` 可见区触发，并限制单页绑定动画元素数量，避免几百条列表同时动画。
+- 把持续动画收敛到少量 premium 场景：
+  - 进度条流光从无限循环改成一次性播放。
+  - 片子网格只给前 48 片做入场动画。
+  - skeleton shimmer 只在 premium 档开启。
+- 动画优先使用 `transform` 和 `opacity`，去掉页面退出/卡片入场中的 `filter`。
+- 给动效 QA 增加性能预算：
+  - 检查 motion tier。
+  - 检查单页动画元素上限。
+  - 检查运行中的无限动画数量。
+  - 采样 `requestAnimationFrame` 帧间隔，防止明显掉帧。
+- 更新 PWA/CSS/JS 版本，避免手机继续使用旧动效资源。
+
+### 验收标准
+- 页面切换、统计卡、列表、底部菜单、FAB 仍有高级动效质感。
+- 动效不会让列表页出现大量持续动画。
+- 390px/412px/320px 移动端无横向溢出，底部菜单和 `+` 不遮挡。
+- 工人片子操作仍只调用单片推进接口，不整单重拉。
+- 取货四卡片切换、模糊查询、客户搜索、归档/查询、核心 smoke 全部通过。
+
+### 验证命令
+```bash
+bash scripts/status.sh
+node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)
+bash scripts/build-i18n.sh
+node scripts/motion-browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/customer-search-qa.js
+node scripts/browser-qa.js
+node scripts/perf-check-worker.js
+./scripts/smoke.sh
+```
+
+### Phase 21 验收结果
+- `frontend/js/api.js` 已加入 `motion-lite` / `motion-premium` 分级和可见区动效调度，`MutationObserver` 只观察 `body` 并按帧合并处理新增节点 ✅
+- `frontend/shared.css` 已把重动画收敛到 premium 档，列表/卡片用可见区入场，进度条流光改为一次性播放，减少持续动画占用 ✅
+- PWA 版本提升到 `v24-2026-05-21-motion-perf`，全部 HTML 的 CSS/JS 版本参数提升到 `v=20260521-motion-perf`，缓存清理 key 同步更新 ✅
+- 动效专项 QA 首轮发现进度条无限流光过多，已修复并复验通过 ✅
+- 验证通过：
+  - `bash scripts/status.sh` ✅，服务健康在 `:8781`
+  - `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+  - `bash scripts/build-i18n.sh` ✅
+  - `node scripts/motion-browser-qa.js` ✅，覆盖 412/390/320 移动视口、低动效模式和帧预算
+  - `node scripts/navigation-browser-qa.js` ✅
+  - `node scripts/page-matrix-qa.js` ✅，30 项页面矩阵通过
+  - `node scripts/pickup-batch-browser-qa.js` ✅
+  - `node scripts/customer-search-qa.js` ✅
+  - `node scripts/browser-qa.js` ✅
+  - `node scripts/perf-check-worker.js` ✅，单片操作只发 `POST /api/pieces/:id/advance`，无整单重拉
+  - `./scripts/smoke.sh` ✅
+
+## Phase 22：订单详情取货入口统一到按片取货（2026-05-21）
+
+### 需求
+订单列表进入订单详情后，底部“调出取货签字”仍跳到旧整单取货页，不能按片取货。需要统一到新的跨订单、分片取货逻辑。
+
+### 任务
+- 订单详情 `ready_pickup` 状态的底部按钮改为跳转 `pickup-search.html?order_id=<订单ID>`。
+- `pickup-search.html` 支持 `order_id`：
+  - 先读取订单详情，自动选择该订单客户。
+  - 默认只展示该订单当前可取片，仍然通过 `piece_ids` 创建提货批次。
+  - 返回按钮回到当前订单详情。
+  - 如果该订单没有可取片，展示提示，并可切到该客户全部可取片。
+- 旧 `pickup-sign.html?id=<订单ID>` 改为纯兼容重定向页，自动跳到 `pickup-search.html?order_id=<订单ID>`，前端不再保留旧整单提交逻辑。
+- 补充 `piece_picked_up` / `piece_pickup_reverted` 事件翻译，订单详情时间线能显示按片取货事件。
+- 更新 PWA/CSS/JS 版本，避免手机旧缓存继续打开旧签字页。
+
+### 验收标准
+- 从订单详情点击“调出取货签字”进入新按片取货页面。
+- 页面只显示该订单可取玻璃片，老板可选择其中几片办理取货。
+- 提交后生成提货批次，不调用旧整单取货接口。
+- 旧 `pickup-sign.html?id=...` 链接也会跳到新流程。
+- 部分取货后订单详情时间线显示片取货事件，客户仍有剩余未取片可继续办理。
+
+### 验证结果
+- `node scripts/browser-qa.js` ✅，覆盖订单详情按钮、新旧入口跳转、按片选择 2 片生成提货批次、时间线和剩余 6 片可继续取货。
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅
+- `node scripts/customer-search-qa.js` ✅
+- `node scripts/perf-check-worker.js` ✅，单片操作仍只发 `POST /api/pieces/:id/advance`
+- `./scripts/smoke.sh` ✅
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+- `bash scripts/build-i18n.sh` ✅
+
+## Phase 23：订单筛选统一等待 GIF 与背景模糊（2026-05-21）
+
+### 需求
+订单页点击“全部 / 加急 / 逾期 / 生产中 / 可取货”时，列表正在加载但没有全项目统一的等待 GIF 和背景模糊，体验不一致。
+
+### 任务
+- 将页面跳转用的 `.page-transition-loader` 抽成公共 `showTransitionLoader()` / `hideTransitionLoader()` / `withGlobalLoader()`。
+- 订单页非首次加载时，筛选和搜索刷新订单列表都使用公共 loader：
+  - 居中本地 `/icons/loading.gif`
+  - 背景模糊遮罩
+  - 最小展示时间，避免闪一下
+- 快速连续点击筛选时，只渲染最后一次请求结果，避免旧请求覆盖新筛选。
+- `archived=1` 页面点击“全部”返回当前订单时也先显示统一 loader。
+- 更新 PWA/CSS/JS 版本，避免手机继续加载旧订单页资源。
+
+### 验收标准
+- 订单页筛选按钮点击后，必须出现统一等待 GIF 和背景模糊。
+- 加载完成后遮罩自动关闭，列表显示对应筛选结果。
+- 页面跳转过场仍然使用同一套 loader。
+- 低动效模式仍不强制启用页面过场动画。
+
+### 验证结果
+- `node scripts/motion-browser-qa.js` ✅，新增覆盖订单筛选 loader 的 GIF 和 `backdrop-filter: blur(...)` 检查，覆盖 412/390/320 移动视口。
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/browser-qa.js` ✅
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `node scripts/perf-check-worker.js` ✅
+- `./scripts/smoke.sh` ✅
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+
+## Phase 24：订单列表模糊查询修复（2026-05-21）
+
+### 问题
+订单列表搜索框看起来“没效果”。实际排查发现两类问题：
+- 后端只按原始字符串 `LIKE` 搜索，订单号 `2605011-220` 输入成 `2605011220` 时搜不到。
+- 自动化 QA 没有等待搜索接口返回，容易在初始 100 条列表里误判搜索未生效。
+
+### 任务
+- 后端 `/api/orders` 搜索改为分词模糊匹配，支持订单号、项目名、备注、客户公司、联系人、电话、邮箱、日期。
+- 对订单号/客户名/电话等字段增加“紧凑匹配”，忽略横线、空格、`#`、`/`、`.`、`_`、括号、`+` 等常见分隔符。
+- 多个关键词按 AND 收敛结果，避免几百个客户/订单时越搜越乱。
+- 浏览器 QA 增加订单列表搜索断言：用不带横线的订单号搜索，必须等待 `/api/orders?search=...` 返回，并且列表只显示目标订单。
+
+### 验收标准
+- 输入完整订单号可搜索到订单。
+- 输入去掉横线/空格的订单号也可搜索到订单。
+- 输入多个关键词能进一步缩小结果。
+- 手机端订单列表在搜索接口返回后更新，不停留在初始 100 条列表。
+
+### 验证命令
+```bash
+node -c backend/routes/orders.js
+node -c scripts/browser-qa.js
+node scripts/browser-qa.js
+./scripts/smoke.sh
+```
+
+### 验证结果
+- `node -c backend/routes/orders.js` ✅
+- `node -c scripts/browser-qa.js` ✅
+- `node scripts/browser-qa.js` ✅，覆盖订单列表用无横线订单号搜索，列表只剩目标订单
+- `./scripts/smoke.sh` ✅，订单创建、工序、取货、归档主链路通过
+
+## Phase 25：订单列表长按快捷菜单（2026-05-21）
+
+### 需求
+老板在订单列表不想先进入详情再操作。订单列表需要支持手机长按订单行，弹出快捷菜单，菜单里展示“修改订单”和订单详情页右下角主按钮对应的动作。
+
+### 任务
+- 订单列表行增加 `data-order-id`，普通点击仍进入订单详情。
+- 手机触摸长按订单行打开快捷菜单，桌面右键也可打开，避免影响正常点按。
+- 快捷菜单动作按订单状态动态展示：
+  - 未完成：查看车间。
+  - 已完成但未通知：通知可取货。
+  - 可取货：调出取货签字。
+  - 已取货：重发交割单。
+- 菜单同时包含“修改订单”和“订单详情”；已取货订单补充归档、撤销取货。
+- 订单列表页补齐修改订单弹窗，复用详情页的订单字段和片子工序/备注编辑逻辑。
+- 长按时增加轻量按压反馈，并禁用手机系统长按选中文本。
+- PWA/CSS/JS 版本提升到 `v27-2026-05-21-order-longpress`，避免手机旧缓存。
+
+### 验收标准
+- Pixel 手机上长按订单行会弹出快捷菜单。
+- 普通点击订单行仍进入订单详情。
+- 长按菜单必须包含“修改订单”和当前订单详情底部主动作。
+- 点击“修改订单”能在列表页直接打开编辑弹窗，保存后列表刷新。
+- 对主业务链路无回归。
+
+### 验证结果
+- `node -c frontend/js/api.js` ✅
+- `node -c scripts/browser-qa.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `node scripts/browser-qa.js` ✅，覆盖订单列表触摸长按菜单和列表页修改订单弹窗
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `./scripts/smoke.sh` ✅
+
+## Phase 26：订单列表补充“已取货”筛选（2026-05-21）
+
+### 问题
+老板想在订单列表长按已取货订单进行归档，但当前订单页只有“全部 / 加急 / 逾期 / 生产中 / 可取货”，没有“已取货”。当未归档订单超过 100 条时，“全部”只加载最新 100 条，较早的已取货订单会被新订单挤出列表，看起来像无法展示已取货订单。
+
+### 任务
+- 在订单列表筛选栏增加“已取货”标签。
+- 点击后调用 `/api/orders?status=picked_up`，只展示未归档的已取货订单。
+- 已取货订单长按菜单继续展示“重发交割单 / 移入归档 / 撤销取货”。
+- PWA/CSS/JS 版本提升到 `v28-2026-05-21-picked-filter`，避免手机旧缓存。
+- 浏览器 QA 增加完整验证：部分取货后验证剩余 6 片，再取完剩余片，回到订单列表点击“已取货”，确认目标订单出现并且长按菜单有“移入归档”。
+
+### 验收标准
+- 老板可以从订单列表点击“已取货”看到未归档的已取货订单。
+- 在“已取货”列表中长按订单，可以直接归档。
+- “归档订单”仍只显示已归档订单。
+- 普通订单列表、取货、归档主链路无回归。
+
+### 验证结果
+- `node -c frontend/js/api.js` ✅
+- `node -c scripts/browser-qa.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `node scripts/browser-qa.js` ✅，覆盖“已取货”筛选和长按归档菜单
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `./scripts/smoke.sh` ✅
+
+## Phase 27：订单列表筛选区降噪与统计卡快捷筛选（2026-05-21）
+
+### 问题
+订单列表顶部筛选条有 7 个入口（归档、全部、加急、逾期、生产中、可取货、已取货），Pixel 手机上显得拥挤，并且与上方 4 个统计卡产生冗余。
+
+### 任务
+- 4 个统计卡改为可点击快捷筛选：
+  - 订单总数 → 全部。
+  - 生产中 → 生产中。
+  - 待取货 → 可取货。
+  - 待补片 → 待补片。
+- 筛选条精简为 4 个主入口：
+  - 全部
+  - 已取货
+  - 归档
+  - 筛选
+- “筛选”二级菜单包含：加急、逾期、生产中、可取货、待补片。
+- 归档改为同页视图切换，不再依赖拥挤的独立链接。
+- 保持已取货列表可长按归档。
+- PWA/CSS/JS 版本提升到 `v29-2026-05-21-dashboard-filters`，避免手机旧缓存。
+
+### 验收标准
+- Pixel 手机订单页筛选条只显示 4 个入口，不横向拥挤。
+- 统计卡点击后能直接切换对应筛选。
+- “筛选”菜单能打开并展示二级筛选项。
+- 已取货和归档仍能从主入口直接进入。
+- 长按订单菜单、按片取货、归档、搜索、动效无回归。
+
+### 验证结果
+- `node -c frontend/js/api.js` ✅
+- `node -c scripts/browser-qa.js` ✅
+- `node -c scripts/motion-browser-qa.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `node scripts/browser-qa.js` ✅，覆盖 4 入口筛选条、统计卡快捷筛选、二级筛选菜单、已取货长按归档入口
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅，覆盖 412/390/320 移动视口和低动效模式
+- `node scripts/page-matrix-qa.js` ✅
+- `./scripts/smoke.sh` ✅
+
+## Phase 28：上线前安全 QA 修复（2026-05-21）
+
+### 问题
+安全 QA 发现 6 项上线阻断/可复现问题：
+- 工人账号可直接读取老板侧订单详情、客户列表，泄露客户邮箱、事件、取货记录。
+- `/uploads` 被匿名静态暴露，图纸、签名、交割单只要拿到 URL 就能下载。
+- 新建订单 `priority` 缺少前置校验，非法值触发 DB 约束并返回 500。
+- 取货签名只检查 Buffer 非空，不校验有效 PNG，垃圾 base64 会导致 PDF 生成 500。
+- 多个 QA 脚本依赖 `bossdemo/workerdemo`，干净 DB 只 seed `admin/worker`。
+- 浏览器 QA 依赖 Playwright，但 `backend/package.json` 没声明，fresh clone 不能复现完整 QA。
+
+### 任务
+- 对老板侧读接口加角色限制：
+  - `/api/orders`、`/api/orders/:id` 只允许 boss。
+  - `/api/customers` 只允许 boss。
+- 保持工人功能可用：
+  - 工人待做继续使用 `/api/pieces`。
+  - 工人片子网格从 `/api/orders/:id` 改为使用工人可访问的 pieces 查询，避免读取客户邮箱/events/pickups。
+- 移除匿名 `/uploads` 静态服务，改为受保护的文件下载路由：
+  - 未登录访问 `/uploads/...` 返回 401。
+  - 工人只能读取 `/uploads/orders/...` 图纸。
+  - 老板可读取图纸、签名、交割单、上传 PDF。
+  - 阻止路径穿越。
+- 新建订单校验 `priority`，非法值返回 400。
+- 新增签名 PNG 校验，单订单取货和批量取货都在写文件/生成 PDF 前返回 400。
+- DB seed 增加 `bossdemo/boss123456` 和 `workerdemo/worker123456`，README 同步说明。
+- 把 `playwright` 加入项目依赖，确保浏览器 QA 可复现。
+- 增加安全回归脚本，覆盖 worker RBAC、匿名文件保护、非法 priority、非法签名。
+
+### 验收标准
+- worker 调老板订单/客户接口返回 403。
+- worker 工人页面仍能打开待做和片子图纸。
+- 匿名访问任意 `/uploads/orders|slips|signatures|pdfs` 返回 401。
+- worker 不能访问 slips/signatures/pdfs，boss 可以访问。
+- 非法 priority 返回 400，不返回 500。
+- 非 PNG 签名返回 400，不返回 500。
+- 干净 DB 初始化包含 admin/worker/bossdemo/workerdemo。
+- `npm install` 后浏览器 QA 依赖可由项目自身提供。
+
+### 验证命令
+```bash
+node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)
+bash scripts/status.sh
+node scripts/security-regression.js
+node scripts/pickup-batch-smoke.js
+node scripts/summary-smoke.js
+node scripts/browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/motion-browser-qa.js
+node scripts/perf-check-worker.js
+node scripts/customer-search-qa.js
+node scripts/pickup-batch-browser-qa.js
+./scripts/smoke.sh
+```
+
+### 验证结果
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+- `bash scripts/status.sh` ✅，服务运行在 `http://localhost:8781`
+- `node scripts/security-regression.js` ✅，覆盖 worker RBAC、匿名/角色文件访问、非法 priority、非法签名、有效批量取货文件权限
+- `node scripts/pickup-batch-smoke.js` ✅
+- `node scripts/summary-smoke.js` ✅
+- `node scripts/browser-qa.js` ✅
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅
+- `node scripts/perf-check-worker.js` ✅，单片操作只发 `POST /api/pieces/:id/advance`
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `./scripts/smoke.sh` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `cd backend && npm ls playwright --depth=0` ✅，项目依赖可解析到 `playwright@1.60.0`
+
+### 完成结果
+- `/api/orders`、`/api/orders/:id`、`/api/customers` 已收紧为 boss-only。
+- 工人片子网格改用 `/api/pieces?order_id=...`，不再依赖老板订单详情 payload。
+- `/uploads` 改为鉴权文件流：匿名 401，worker 仅可读 `uploads/orders` 图纸，boss 可读图纸/PDF/签名/取货单；响应 `Cache-Control: private, no-store`。
+- 前端图纸和 PDF 下载改为登录态 blob URL，避免匿名直链。
+- 新建订单 `priority` 非法值前置返回 400。
+- 单订单取货和批量取货都用严格 PNG 签名校验，垃圾 base64 返回 400。
+- 干净 DB seed 增加 `bossdemo/boss123456`、`workerdemo/worker123456`，README 已同步。
+- `backend/package.json` / lockfile 已声明 Playwright。
+
+## Phase 29：订单总览统计口径统一（2026-05-21）
+
+### 问题
+老板订单页顶部 4 个统计卡当前从“当前列表接口返回的前 100 条订单”里计算。点击生产中、待取货、待补片或搜索后，列表数据变化，统计卡数字也跟着变化，导致同一个总览区出现不同口径。
+
+### 任务
+- 新增 boss-only `/api/orders/stats`，按当前视图范围（未归档 / 已归档）直接从数据库汇总，不受列表筛选、搜索、分页限制影响。
+- 顶部 4 个统计卡只使用 `/api/orders/stats` 的结果：
+  - 订单总数：当前视图范围内订单总数。
+  - 生产中：`status='in_production'` 订单数。
+  - 待取货：`status='ready_pickup'` 订单数，包含部分取货后仍有未取片的订单。
+  - 待补片：需补切片数。
+- 顶部补片/逾期提醒也使用同一套稳定统计，避免切换筛选后提醒忽隐忽现。
+- 后端 `/api/orders` 补齐 `filter=overdue|rework`，避免“统计有数量但列表只在前 100 条里筛”的错觉。
+- 浏览器 QA 增加断言：搜索、点击统计卡筛选后，4 个统计数字保持不变。
+- 安全回归补充：worker 不能访问 `/api/orders/stats`。
+
+### 验收标准
+- 点击“订单总数 / 生产中 / 待取货 / 待补片”统计卡只改变下面列表，4 个统计数字不变。
+- 输入订单号/公司名搜索时，统计卡数字不随搜索结果变化。
+- 待补片、逾期列表由后端过滤，不受首页 100 条分页限制。
+- 工人账号访问统计接口返回 403。
+- 现有搜索、归档、已取货、长按菜单、取货、汇总、安全回归无回归。
+
+### 验证命令
+```bash
+node -c backend/routes/orders.js
+node -c scripts/browser-qa.js
+node -c scripts/security-regression.js
+bash scripts/restart.sh
+node scripts/security-regression.js
+node scripts/browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/motion-browser-qa.js
+./scripts/smoke.sh
+```
+
+### 验证结果
+- `node -c backend/routes/orders.js` ✅
+- `node -c scripts/browser-qa.js` ✅
+- `node -c scripts/security-regression.js` ✅
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+- `bash scripts/restart.sh` ✅，服务运行在 `http://localhost:8781`
+- 接口抽查 ✅：
+  - `/api/orders/stats` 返回全局未归档统计，不受列表筛选影响。
+  - `/api/orders?status=in_production`、`/api/orders?status=ready_pickup`、`/api/orders?filter=rework`、`/api/orders?filter=overdue` 的 `total` 与统计口径一致。
+  - worker 访问 `/api/orders/stats` 返回 403。
+- `node scripts/security-regression.js` ✅，新增覆盖 worker 不能访问订单统计接口。
+- `node scripts/browser-qa.js` ✅，覆盖搜索后统计不变、点击统计卡筛选后统计不变、长按菜单、已取货筛选。
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/summary-smoke.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅
+- `node scripts/pickup-batch-smoke.js` ✅
+- `node scripts/customer-search-qa.js` ✅
+- `node scripts/perf-check-worker.js` ✅
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `./scripts/smoke.sh` ✅，独立重跑通过完整订单/工序/取货/归档主链路。
+
+### 完成结果
+- 订单总览顶部 4 个统计卡现在由 `/api/orders/stats` 提供稳定全局数字，不再随搜索、分页或当前筛选列表变化。
+- 点击统计卡只作为快捷筛选入口，改变下面订单列表，不改变顶部统计口径。
+- 补片、逾期列表筛选改为后端过滤，避免从前 100 条里二次筛选造成空列表/漏单。
+- 补片和逾期提醒改用同一套统计口径，不再因为切换筛选忽隐忽现。
+- PWA 版本提升到 `v31-2026-05-21-dashboard-stats`，前端资源版本提升到 `20260521-dashboard-stats`，手机端会清旧缓存。
+
+## Phase 30：取货统计卡选中态统一（2026-05-21）
+
+### 问题
+取货页顶部统计卡选中态是紫色描边和底部横线，订单页统计卡选中态是黑色细边框加柔和外环。两个一级菜单的同类卡片视觉语言不一致。
+
+### 任务
+- 取货页 `.pickup-stat-card.active` 改成与订单页 `.stat-action.active` 一致：
+  - 黑色细边框。
+  - 柔和外环阴影。
+  - 无紫色底部横线。
+  - 无渐变背景。
+- 更新取货页资源版本和 PWA 版本，避免手机端旧 CSS 缓存。
+- 浏览器 QA 增加断言：取货统计卡 active 样式必须与订单统计卡 active 样式一致。
+
+### 验收标准
+- 取货页点击 4 个统计卡时，选中态和订单页统计卡一致。
+- Pixel 手机视口无横向溢出，底部菜单和 FAB 不遮挡。
+- 动效、取货批次、订单页、导航、页面矩阵无回归。
+
+### 验证命令
+```bash
+node -c frontend/js/api.js frontend/sw.js scripts/pickup-batch-browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/motion-browser-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/browser-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `node -c frontend/js/api.js frontend/sw.js scripts/pickup-batch-browser-qa.js` ✅
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+- `bash scripts/restart.sh` ✅，服务运行在 `http://localhost:8781`
+- `node scripts/pickup-batch-browser-qa.js` ✅，新增覆盖取货统计卡 active 样式与订单统计卡一致。
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/browser-qa.js` ✅
+- `bash scripts/status.sh` ✅
+
+### 完成结果
+- 取货页统计卡 active 状态已改为订单页同款黑色细边框 + 柔和外环。
+- 移除了取货统计卡 active 的紫色底部横线和渐变背景。
+- `pickup-batches.html` 资源版本提升到 `20260521-pickup-card-active`。
+- PWA 版本提升到 `v32-2026-05-21-pickup-card-active`，缓存清理 key 同步更新。
+
+## Phase 31：QA 回归阻断修复与前端体验补强（2026-05-21）
+
+### 问题
+QA 复核指出两条上线阻断和若干体验欠账：
+- `backend npm run smoke` 的 PDF 残留断言可能红；当前单独复跑通过，但脚本用全目录 PDF 数量判断，容易被并行 QA 污染。
+- 批量取货批次号通过“取最后一条 +1”生成，存在并发/重入唯一键冲突风险，曾复现 `/api/pickups/batches` 500。
+- 取货批次详情页用浏览器原生 `prompt()` 输入回退原因，移动端体验粗糙。
+- 取货搜索页是长表单，客户、选片、签字缺少步骤聚焦。
+- 客户对账页缺少顶部摘要卡片。
+- 工人工位不记忆上次工序。
+
+### 任务
+- 后端新增 `pickup_batch_counters` 计数表，用数据库事务原子分配 `PU-YYMMDD-0001` 批次号，避免唯一键 500。
+- smoke 改为检查本次无效/重复上传的唯一文件名是否被清理，不再用全目录 PDF 数量。
+- 取货批次详情页移除 `prompt()`，改成站内 textarea 模态，支持必填校验和移动端样式。
+- 取货搜索页增加 3 步流程提示，未选片前隐藏/弱化签字区，让首屏聚焦客户和可取玻璃。
+- 客户对账页增加总订单、已取片、未取片、提货批次摘要卡片。
+- 工人工位记忆上次选择的工序。
+
+### 验收标准
+- `cd backend && npm run smoke` 独立通过。
+- `node scripts/security-regression.js` 通过，且批量取货不再出现 `pickup_batches.batch_number` 唯一约束 500。
+- 取货批次详情页不再触发浏览器原生 dialog。
+- 取货搜索页在未选片时不直接展示签名表单；选片后签名表单出现并可提交。
+- 客户对账页顶部能一眼看到订单/已取/未取/批次数。
+- 工人工位刷新后保持上次工序。
+
+### 验证命令
+```bash
+node -c backend/db.js backend/routes/pickups.js backend/routes/orders.js frontend/js/api.js frontend/sw.js scripts/security-regression.js scripts/pickup-batch-browser-qa.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/perf-check-worker.js
+bash scripts/restart.sh
+cd backend && npm run smoke
+node scripts/security-regression.js
+node scripts/pickup-batch-smoke.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/motion-browser-qa.js
+node scripts/perf-check-worker.js
+node scripts/summary-smoke.js
+```
+
+### 验证结果
+- `node -c backend/db.js backend/routes/pickups.js backend/routes/orders.js frontend/js/api.js frontend/js/i18n.js frontend/sw.js scripts/security-regression.js scripts/pickup-batch-browser-qa.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/perf-check-worker.js` ✅
+- `bash -n backend/scripts/smoke.sh scripts/smoke.sh` ✅
+- `bash scripts/restart.sh` ✅，迁移后服务运行在 `http://localhost:8781`
+- `cd backend && npm run smoke` ✅，PDF 清理断言改为检查本次唯一文件名，不受并行 QA 污染。
+- `node scripts/security-regression.js` ✅，批量取货不再因 `pickup_batches.batch_number` 唯一约束返回 500。
+- `node scripts/pickup-batch-smoke.js` ✅
+- 连续创建两个取货批次专项验证 ✅，批次号递增：`PU-260521-0077` → `PU-260521-0078`
+- `node scripts/pickup-batch-browser-qa.js` ✅，覆盖回退原因站内模态，确认不触发原生 dialog。
+- `node scripts/browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅
+- `node scripts/perf-check-worker.js` ✅
+- `node scripts/summary-smoke.js` ✅
+
+### 完成结果
+- `pickup_batch_counters` 计数表已加入迁移，批次号分配会先对齐当日历史最大编号，再原子递增。
+- `/api/pickups/batches` 已避免“查最后一条 +1”的重入/并发撞号风险。
+- smoke 的 PDF 清理断言不再使用全目录数量，改为检查本次无效/重复上传文件名是否残留。
+- `pickup-batch-detail.html` 的回退原因输入从原生 `prompt()` 改为站内 textarea 模态。
+- `pickup-search.html` 增加客户、选片、签字三步提示；未选片前隐藏签字表单。
+- `summary-customer.html` 增加订单、已取片、未取片、提货批次摘要卡。
+- `worker-queue.html` 会记忆上次选择的工序。
+- 前端资源版本提升到 `20260521-regression-polish`，PWA 版本提升到 `v33-2026-05-21-regression-polish`。
+
+## Phase 32：交付缓存与 QA 文档收口（2026-05-21）
+
+### 问题
+终验没有发现阻断缺陷，但还有 3 个交付层面的低风险隐患：
+- HTML 资源 query 参数混用 `20260521-security-hardening`、`20260521-dashboard-stats`、`20260521-pickup-card-active` 和 `20260521-regression-polish`，PWA 缓存路径下可能出现页面加载不同代际 CSS/JS。
+- README 只写了 smoke 和泛浏览器 QA，没有把发布前关键 QA 命令列成一套显性清单。
+- 默认运行目录一直使用 `backend/glass.db` 和 `backend/uploads/`，QA 脚本会持续写入演示/测试数据，需要在交接文档里说明。
+
+### 任务
+- 统一所有前端 HTML 的 `shared.css`、`api.js`、`i18n.js` query 参数到 `20260521-regression-polish`。
+- README 增加发布前 QA 清单，覆盖后端 smoke、安全回归、浏览器矩阵、导航、动画、性能、取货批次和汇总验证。
+- README 增加测试数据说明，明确默认 DB/uploads 是共享运行目录，QA 会写入数据，交付/演示前需要备份或清理。
+
+### 验收标准
+- `frontend/*.html` 内不再出现旧资源版本号。
+- README 能直接指导新环境执行发布前 QA。
+- README 明确说明 `backend/glass.db` 和 `backend/uploads/` 的共享数据风险。
+
+### 验证命令
+```bash
+rg "20260521-" frontend/*.html
+rg "security-regression|page-matrix|browser-qa|backend/glass.db|backend/uploads" README.md
+node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `rg "20260521-" frontend/*.html` ✅，全部 HTML 资源 query 均为 `20260521-regression-polish`。
+- `rg "20260521-(security-hardening|dashboard-stats|pickup-card-active|motion|transition|premium|pickup-tabs|pickup-batch-search)" frontend/*.html || true` ✅，旧版本参数已清空。
+- `rg "security-regression|page-matrix|browser-qa|backend/glass.db|backend/uploads" README.md` ✅
+- `node -c $(find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' | sort)` ✅
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅，`NAVIGATION BROWSER QA PASS boss=bottom-nav worker=no-nav`
+- `bash scripts/status.sh` ✅，服务运行在 `http://localhost:8781`，健康检查返回 `{"ok":true}`。
+
+### 完成结果
+- 前端 HTML 资源版本已统一到 `20260521-regression-polish`，与当前 SW 版本 `v33-2026-05-21-regression-polish` 对齐。
+- README 已补充发布前 QA 清单。
+- README 已补充 `backend/glass.db` 和 `backend/uploads/` 共享运行目录说明，明确 QA 会写入测试数据。
+
+## Phase 33：产品体验层级打磨（2026-05-21）
+
+### 问题
+当前版本已经没有阻断缺陷，但几处页面仍偏“后台工具”：
+- 老板订单首页首屏层级偏平，提醒、统计、筛选、搜索和列表同时出现，决策优先级不够清楚。
+- 取货搜索页虽然有三步提示，但仍像长页表单，选片后缺少自动推进和固定已选反馈。
+- 取货批次详情页偏列表，不够像交割单详情，批次数量和回退状态不够醒目。
+- 客户管理页新增入口、洞察卡、搜索框竞争注意力，查找客户的主任务不够前置。
+- 登录失败提示只是表单内红字，移动端存在感偏弱。
+- README 发布前 QA 清单还未分层，接手者不容易判断必跑和专项检查。
+
+### 任务
+- 老板首页增加任务优先区，把待补片、逾期、待取货作为首屏动作入口；筛选条改为高频视图，归档弱化到更多菜单。
+- 取货搜索页增强 stepper 的 sticky 锚点感，固定显示已选数量，选片后自动滚到签字区。
+- 取货批次详情页增加批次摘要，总订单数、总片数、已回退片数；把单片回退收进行内二级菜单。
+- 客户页把搜索框前置，新增客户入口弱化成顶部小按钮，洞察卡下移。
+- 登录页错误反馈改为更明显的状态卡，支持多行提示。
+- README QA 清单分成必跑、浏览器覆盖、专项回归三组。
+
+### 验收标准
+- 老板首页首屏能先看到异常和待处理任务，归档不再和高频状态并列抢位。
+- 取货搜索页选中片子后能自动推进到签字区，并在底部固定显示已选片数。
+- 取货批次详情页顶部能直接看到批次规模和回退数量；默认界面更偏查看。
+- 客户页首屏优先支持搜索客户，新增客户入口保留但降低视觉权重。
+- 登录失败提示比原红字更醒目，且不破坏登录 QA。
+- README 能区分必跑检查、浏览器覆盖和专项回归。
+
+### 验证命令
+```bash
+node -c frontend/js/i18n.js frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/page-matrix-qa.js
+node scripts/browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/motion-browser-qa.js
+node scripts/customer-search-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `bash scripts/build-i18n.sh` ✅
+- `node -c frontend/js/i18n.js frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/page-matrix-qa.js` ✅
+- `node scripts/browser-qa.js` ✅，覆盖老板首页任务入口、收敛后的筛选、订单搜索、长按菜单、按片取货和已取货归档菜单。
+- `node scripts/pickup-batch-browser-qa.js` ✅，覆盖取货搜索已选数量、批次详情摘要、行内菜单回退和站内回退模态。
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅，老板底部导航和工人无底部导航通过。
+- `node scripts/motion-browser-qa.js` ✅，3 个移动视口和 reduced-motion 通过。
+- `node scripts/customer-search-qa.js` ✅，客户搜索、客户洞察和移动端无横溢通过。
+- `bash scripts/status.sh` ✅，服务运行在 `http://localhost:8781`，健康检查返回 `{"ok":true}`。
+- 资源版本提升后复跑 `node scripts/page-matrix-qa.js` ✅，确认 `20260521-product-polish` 资源路径加载正常。
+
+### 完成结果
+- 老板首页新增待处理任务入口：待补片、逾期、待取货；归档已弱化到“筛选”菜单。
+- 取货搜索页 stepper 改为 sticky 锚点，底部确认按钮显示已选片数，首次选片后自动滚到签字区。
+- 取货批次详情页新增订单数、取货片数、回退片数摘要；单片回退收进行内菜单。
+- 客户页搜索框前置，新增客户入口改为顶部轻按钮。
+- 登录失败提示改为醒目的状态卡。
+- README 发布前 QA 清单已分为必跑、浏览器主流程、专项回归三组。
+- 前端资源版本提升到 `20260521-product-polish`，PWA 版本提升到 `v34-2026-05-21-product-polish`。
+
+## Phase 34：前端样式与渲染基础收敛（2026-05-21）
+
+### 问题
+当前前端已经进入产品打磨阶段，但还有几类长期维护风险：
+- 页面内联样式仍较多，stat card、list row、section header、action strip 等模式分散。
+- 多个页面继续用字符串 `innerHTML` 重复拼同类 UI，后续视觉和文案容易漂。
+- 老板首页和取货流程仍有一定信息噪音，已选状态和任务优先级还能更清楚。
+- 客户页/客户对账页在数据变多后扫读效率还可以继续提升。
+
+### 任务
+- 在 `frontend/js/api.js` 增加轻量 render helper：`renderStatCells`、`renderPanel`、`renderSectionHeader`、`renderPickupSteps`。
+- 在 `frontend/shared.css` 增加通用 class：`content-shell`、`section-panel`、`section-head`、`metrics-grid`、`task-priority-stack`、`order-card-layout`、`pickup-selected-note` 等，减少页面内联样式。
+- 老板首页把任务入口进一步作为首屏优先区，普通统计与列表保持但弱化结构噪音。
+- 取货搜索 stepper 增加已选片数提示，让“当前已选/下一步签字”更明确。
+- 取货批次详情、客户对账页改用通用 metrics/grid helper。
+- 客户列表增加轻量排序提示，默认强调最近业务和搜索。
+
+### 验收标准
+- 高频页面的同类结构优先使用共享 class/helper，减少重复内联样式。
+- 老板首页、取货搜索、批次详情、客户页、客户对账页视觉仍一致，移动端不横溢。
+- 现有业务流程不回归：订单搜索、长按菜单、按片取货、批次回退、客户搜索、页面矩阵全部通过。
+
+### 验证命令
+```bash
+bash scripts/build-i18n.sh
+node -c frontend/js/i18n.js frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/page-matrix-qa.js
+node scripts/browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/motion-browser-qa.js
+node scripts/customer-search-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `bash scripts/build-i18n.sh` ✅
+- `node -c frontend/js/i18n.js frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/page-matrix-qa.js` ✅
+- `node scripts/browser-qa.js` ✅
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/customer-search-qa.js` ✅
+- `node scripts/motion-browser-qa.js` 首轮发现 `.content-shell` 未纳入页面入场动画选择器，已修复后复跑 ✅，`MOTION BROWSER QA PASS viewports=3 reduced-motion=1`
+- `bash scripts/status.sh` ✅，服务运行在 `http://localhost:8781`，健康检查返回 `{"ok":true}`。
+- `rg "20260521-" frontend/*.html | rg -v "20260521-ui-foundation" || true` ✅，HTML 资源版本已统一。
+
+### 完成结果
+- 新增 `renderStatCells`、`renderPanel`、`renderSectionHeader`、`renderPickupSteps` 轻量公共渲染 helper。
+- 新增 `content-shell`、`section-panel`、`section-head`、`metrics-grid`、`metric-cell`、`order-card-layout`、`pickup-selected-note` 等共享 class。
+- 老板首页、取货搜索、取货批次详情、客户对账页已接入部分共享 helper/class，减少重复内联样式。
+- 取货搜索 stepper 增加已选片数提示，客户页增加默认排序/搜索提示。
+- 动效系统已覆盖新的 `.content-shell` 页面容器。
+- 前端资源版本提升到 `20260521-ui-foundation`，PWA 版本提升到 `v35-2026-05-21-ui-foundation`。
+
+## Phase 35：移动端细节、列表性能与运行隔离（2026-05-21）
+
+### 问题
+当前版本已无阻断缺陷，但还有三类值得在上线前收口的问题：
+- 客户页和汇总页在数据增长后仍以整表重绘为主，搜索输入缺少 debounce，长列表时会先感到“钝”。
+- 取货搜索等移动端高频页已可用，但已选状态与流程焦点还能更稳，尤其在长客户列表下。
+- 当前项目脚本默认总是复用 `backend/.env`、`backend/glass.db` 和 `backend/uploads/`；README 已提示风险，但演示/正式/QA 仍缺少真正可执行的隔离手段。
+
+### 任务
+- 客户页搜索增加 debounce，并把搜索过滤结果、快速跳转和列表渲染尽量收敛到同一条轻量路径，减少高频整页抖动。
+- 汇总页和客户对账页继续接入共享 helper/class，压缩内联布局噪音并保持移动端可扫读性。
+- 取货搜索页在客户切换和选片后维持更稳定的流程状态提示，减少长页来回确认。
+- 后端接入可配置 `UPLOADS_DIR`，让上传目录与 `DB_PATH` 一样可切换。
+- 项目脚本支持通过 `ENV_FILE` 选择独立运行 profile，并补充演示环境初始化/备份脚本，真正做到演示数据隔离。
+
+### 验收标准
+- 客户页搜索输入不会每击键立刻全量重绘，页面在现有 QA 下保持通过。
+- 汇总页、客户对账页继续使用共享 helper/class，移动端无横溢。
+- `UPLOADS_DIR` 未配置时行为与当前兼容；配置后上传与读取都指向新目录。
+- `ENV_FILE=<path> ./scripts/start.sh` 能正常启动，健康检查通过。
+- 备份/演示脚本可生成独立 env/profile，不污染默认 `backend/glass.db` 与 `backend/uploads/`。
+
+### 验证命令
+```bash
+node -c backend/server.js backend/db.js backend/routes/orders.js backend/routes/pickups.js backend/routes/customers.js frontend/js/api.js scripts/start.sh scripts/status.sh scripts/smoke.sh scripts/init-demo-env.sh scripts/backup-runtime.sh
+bash scripts/build-i18n.sh
+ENV_FILE=backend/.env ./scripts/restart.sh
+bash scripts/status.sh
+cd backend && npm run smoke
+node scripts/security-regression.js
+node scripts/browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/motion-browser-qa.js
+node scripts/customer-search-qa.js
+```
+
+### 验证结果
+- `node -c backend/server.js backend/db.js backend/routes/orders.js backend/routes/pickups.js backend/routes/customers.js frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/page-matrix-qa.js scripts/navigation-browser-qa.js scripts/motion-browser-qa.js scripts/customer-search-qa.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `ENV_FILE=backend/.env ./scripts/restart.sh` ✅，服务恢复到 `http://localhost:8781`
+- `bash scripts/status.sh` ✅，健康检查返回 `{"ok":true}`
+- `./scripts/init-demo-env.sh` ✅，生成独立 profile `backend/.env.demo`
+- `ENV_FILE=backend/.env.demo bash scripts/status.sh` ✅，独立 profile 指向 `8782` 且与默认环境分离
+- `./scripts/backup-runtime.sh /tmp/glassorder-backup-check` ✅，导出当前 runtime 的 DB 与 uploads 备份
+- `cd backend && npm run smoke` ✅
+- `node scripts/security-regression.js` ✅
+- `node scripts/browser-qa.js` ✅
+- `node scripts/pickup-batch-browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅，`MOTION BROWSER QA PASS viewports=3 reduced-motion=1`
+- `node scripts/customer-search-qa.js` ✅
+
+### 完成结果
+- 客户页搜索已增加 debounce，并把列表容器收敛到共享 panel/class，减少高频输入时的整页抖动。
+- 汇总页和客户对账页继续接入共享 `renderStatCells` / `renderPanel` / 通用 row class，移动端可扫读性更稳定。
+- 取货搜索页在切换客户和重新选片时会重置签名状态，并在签字区顶部持续显示当前已选片数，移动端流程更稳。
+- 后端已支持 `UPLOADS_DIR`，上传、读取、发凭证都会跟随当前 profile 的上传目录。
+- 项目脚本已支持 `ENV_FILE=<path>` 运行独立 profile；PID/日志文件也会按 profile 拆分。
+- 新增 `scripts/init-demo-env.sh` 和 `scripts/backup-runtime.sh`，可以创建 demo 环境并备份当前 runtime 数据。
+- 前端资源版本提升到 `20260521-runtime-isolation`，PWA 版本提升到 `v36-2026-05-21-runtime-isolation`。
+
+## Phase 36：PWA 安装态专属 UI（2026-05-21）
+
+### 问题
+当前项目已经具备 PWA 基础能力（manifest / SW / standalone display），但仍缺少真正的“安装态”产品体验：
+- 没有检测浏览器态、已安装态、iOS 主屏幕态。
+- 没有安装引导，用户只能靠系统菜单自己发现“添加到主屏幕”。
+- 没有安装后专属 UI，当前页面在已安装态和普通浏览器态完全一致。
+- 没有版本更新提示和离线状态条，PWA 用户更像在用 App，但现在缺少 App 级运行反馈。
+
+### 任务
+- 在 `frontend/js/api.js` 增加 PWA runtime：检测 `display-mode: standalone`、`navigator.standalone`、`beforeinstallprompt`、`appinstalled`、`online/offline`。
+- 新增统一 PWA 状态 UI：安装提示条、iOS 添加到主屏幕引导、离线状态条、发现新版本后的刷新提示。
+- 在登录页和首页接入安装态专属 UI：
+  - 浏览器态显示安装引导。
+  - 已安装态隐藏安装提示并切换为更像 App launcher 的说明文案。
+- 给 `body` 注入安装态 class/data 标记，便于样式层做 installed/browser 两套微差异。
+- 补一条专项 QA 脚本，验证浏览器态和安装态下的关键 UI 分支、离线状态和更新提示容器。
+
+### 验收标准
+- 普通浏览器打开时，支持安装的环境能看到安装入口；iOS/Safari 至少能看到“添加到主屏幕”引导。
+- `standalone` / `navigator.standalone` 环境下，页面会切换到安装态 class，且不再显示安装 CTA。
+- 断网时能显示离线状态条，恢复网络后自动切回在线提示。
+- 新 SW 安装完成且有现有 controller 时，页面能显示“发现新版本，立即刷新”提示。
+- 现有业务流程不回归，主流程 QA 和页面矩阵 QA 继续通过。
+
+### 验证命令
+```bash
+node -c frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/navigation-browser-qa.js scripts/motion-browser-qa.js scripts/pwa-install-qa.js
+bash scripts/build-i18n.sh
+node scripts/pwa-install-qa.js
+node scripts/browser-qa.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+node scripts/motion-browser-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `node -c frontend/js/api.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/pwa-install-qa.js` ✅
+- `bash scripts/build-i18n.sh` ✅
+- `node scripts/pwa-install-qa.js` ✅，覆盖浏览器态 / standalone 安装态分支，以及离线状态条。
+- `node scripts/browser-qa.js` ✅
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅，`MOTION BROWSER QA PASS viewports=3 reduced-motion=1`
+- `bash scripts/status.sh` ✅，服务运行在 `http://localhost:8781`，健康检查返回 `{"ok":true}`。
+
+### 完成结果
+- `frontend/js/api.js` 已新增 PWA runtime：检测安装态、监听 `beforeinstallprompt` / `appinstalled`、处理在线/离线状态、显示新版本刷新提示。
+- 登录页和首页已接入安装态专属 UI：浏览器态显示安装入口，安装态自动隐藏安装 CTA，并切换说明文案。
+- 新增统一 PWA banner 组件，用于安装提示、iOS 主屏幕引导、离线提示、更新提示。
+- `body` 会注入 `pwa-installed` / `pwa-browser` class 与 `data-app-mode`，便于继续做安装态视觉微调。
+- i18n 已补充中英文安装/离线/更新相关文案。
+- 新增 `scripts/pwa-install-qa.js` 专项验证脚本。

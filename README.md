@@ -15,11 +15,17 @@
 ./scripts/stop.sh       # 停止
 ./scripts/smoke.sh      # 跑烟测（必要时自动起停）
 ./scripts/start.sh -f   # 前台运行（调试用，Ctrl+C 结束）
+./scripts/init-demo-env.sh             # 生成独立 demo profile
+ENV_FILE=backend/.env.demo ./scripts/start.sh
+./scripts/backup-runtime.sh            # 备份当前 profile 的 DB 和 uploads
 ```
 
 PID 文件：`backend/logs/server.pid`
 日志文件：`backend/logs/server.log`
 端口：`backend/.env` 里的 `PORT`（默认 8781）
+
+如果用 `ENV_FILE=backend/.env.demo` 之类的独立 profile 运行，PID 和日志会自动切到对应文件名，
+例如 `backend/logs/server-demo.pid`、`backend/logs/server-demo.log`。
 
 ### 方式 B：直接 npm（前台）
 
@@ -56,3 +62,62 @@ npm run smoke
 
 烟测覆盖登录、401、客户 CRUD、XSS 输入持久化、非 PDF 拦截、无效 customer_id 清理、
 样品 PDF 解析、重复订单（独立目录）、片子流转、ready/pickup 和 PDF 生成，连跑两次仍全绿。
+
+浏览器 QA 脚本依赖 Playwright，依赖已声明在 `backend/package.json`；首次安装后可运行根目录
+`scripts/*browser-qa.js` 相关脚本。
+
+## 发布前 QA 清单
+
+交付或演示前建议在仓库根目录按下面分层执行。
+
+必跑检查，失败就不要交付：
+
+```bash
+bash scripts/status.sh
+cd backend && npm run smoke
+cd ..
+node scripts/security-regression.js
+node scripts/page-matrix-qa.js
+node scripts/navigation-browser-qa.js
+```
+
+浏览器主流程覆盖，适合每次 UI 或入口调整后运行：
+
+```bash
+node scripts/browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+```
+
+专项回归，覆盖取货、汇总、动效和工人高频操作：
+
+```bash
+node scripts/pickup-batch-smoke.js
+node scripts/summary-smoke.js
+node scripts/motion-browser-qa.js
+node scripts/perf-check-worker.js
+```
+
+其中 `security-regression.js` 覆盖权限、上传访问和错误输入回归；`page-matrix-qa.js`、
+`navigation-browser-qa.js`、`browser-qa.js` 覆盖主要页面可打开和基础流程；取货、汇总、
+动画和工人性能分别由对应专项脚本覆盖。
+
+## 测试数据说明
+
+项目脚本默认复用同一套运行目录：
+
+- 数据库：`backend/glass.db`
+- 上传文件：`backend/uploads/`
+- 日志和 PID：`backend/logs/`
+
+smoke 和浏览器 QA 会写入测试客户、订单、取货批次、签名和 PDF。长期演示或交付前，
+建议先备份或清理 `backend/glass.db` 与 `backend/uploads/`，避免把历史 QA 数据混入正式验收。
+
+如果你需要把演示环境和默认环境彻底分开，直接生成并使用独立 profile：
+
+```bash
+./scripts/init-demo-env.sh
+ENV_FILE=backend/.env.demo ./scripts/start.sh
+ENV_FILE=backend/.env.demo ./scripts/backup-runtime.sh
+```
+
+`DB_PATH` 和 `UPLOADS_DIR` 都会跟随该 profile 切换，避免默认库和默认上传目录被污染。
