@@ -1,9 +1,12 @@
-require('dotenv').config();
-
 const express = require('express');
 const fs = require('fs');
 const helmet = require('helmet');
 const path = require('path');
+
+require('dotenv').config({
+  path: process.env.ENV_FILE || path.join(__dirname, '.env'),
+});
+
 const db = require('./db');
 const { authenticate } = require('./middleware/auth');
 

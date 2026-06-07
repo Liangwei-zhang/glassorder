@@ -9,7 +9,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { parsePdf } = require('../services/pdfParser');
 const { createPickupSlip } = require('../services/slipPdf');
 const { sendPickupEmail } = require('../services/mailer');
-const { decodePngSignature } = require('../services/signature');
+const { decodeOptionalPngSignature } = require('../services/signature');
 const {
   completedStepsJSON,
   hydratePieceWorkflow,
@@ -478,20 +478,23 @@ router.post('/:id/pickup', requireRole('boss'), async (req, res, next) => {
     const signerName = String(req.body.signer_name || '').trim();
     if (!signerName) return res.status(400).json({ error: 'signer_name is required' });
     const signatureBase64 = String(req.body.signature_base64 || '').trim();
-    if (!signatureBase64) return res.status(400).json({ error: 'signature_base64 is required' });
 
-    const decodedSignature = decodePngSignature(signatureBase64);
+    const decodedSignature = decodeOptionalPngSignature(signatureBase64);
     if (decodedSignature.error) return res.status(400).json({ error: decodedSignature.error });
     const signatureBuffer = decodedSignature.buffer;
 
     const signatureDir = path.join(uploadsBase, 'signatures');
     const slipDir = path.join(uploadsBase, 'slips');
-    fs.mkdirSync(signatureDir, { recursive: true });
     fs.mkdirSync(slipDir, { recursive: true });
 
-    const signatureFile = `signature-${order.order_number}-${Date.now()}.png`;
-    const signaturePath = path.join(signatureDir, signatureFile);
-    fs.writeFileSync(signaturePath, signatureBuffer);
+    let signatureFile = '';
+    let signaturePath = '';
+    if (signatureBuffer) {
+      fs.mkdirSync(signatureDir, { recursive: true });
+      signatureFile = `signature-${order.order_number}-${Date.now()}.png`;
+      signaturePath = path.join(signatureDir, signatureFile);
+      fs.writeFileSync(signaturePath, signatureBuffer);
+    }
 
     const slipFile = `pickup-${order.order_number}-${Date.now()}.pdf`;
     const slipPath = path.join(slipDir, slipFile);
@@ -514,7 +517,7 @@ router.post('/:id/pickup', requireRole('boss'), async (req, res, next) => {
         order.id,
         signerName,
         req.body.signer_phone || null,
-        `/uploads/signatures/${signatureFile}`,
+        signatureFile ? `/uploads/signatures/${signatureFile}` : '',
         `/uploads/slips/${slipFile}`,
         req.user.id,
       );

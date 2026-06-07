@@ -17,12 +17,17 @@ if pid=$(running_pid); then
     kill -9 "$pid" 2>/dev/null || true
   fi
   rm -f "$PID_FILE"
-  # also clean up any other lingering node server.js from this repo
-  pgrep -fa "node server.js" | grep "$BACKEND_DIR" | awk '{print $1}' | xargs -r kill 2>/dev/null || true
+  stale="$(profile_pids | sort -u | grep -v "^$pid$" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  if [ -n "$stale" ]; then
+    echo "Stopping additional current-profile processes: $stale"
+    echo "$stale" | xargs -r kill 2>/dev/null || true
+    sleep 0.2
+    echo "$stale" | xargs -r kill -9 2>/dev/null || true
+  fi
   echo "Stopped."
 else
-  # best-effort cleanup even if pidfile is missing
-  stale=$(pgrep -fa "node server.js" | grep "$BACKEND_DIR" | awk '{print $1}' || true)
+  # best-effort cleanup for this profile even if pidfile is missing
+  stale="$(profile_pids | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   if [ -n "$stale" ]; then
     echo "No pidfile but found stale node processes: $stale — killing."
     echo "$stale" | xargs -r kill 2>/dev/null || true

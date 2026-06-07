@@ -18,6 +18,8 @@
 ./scripts/init-demo-env.sh             # 生成独立 demo profile
 ENV_FILE=backend/.env.demo ./scripts/start.sh
 ./scripts/backup-runtime.sh            # 备份当前 profile 的 DB 和 uploads
+./scripts/clear-test-data.sh           # 预演清空业务测试数据
+CONFIRM_CLEAR_TEST_DATA=1 ./scripts/clear-test-data.sh --apply   # 备份后清空业务测试数据，保留账号
 ```
 
 PID 文件：`backend/logs/server.pid`
@@ -118,6 +120,13 @@ smoke 和浏览器 QA 会写入测试客户、订单、取货批次、签名和 
 ./scripts/init-demo-env.sh
 ENV_FILE=backend/.env.demo ./scripts/start.sh
 ENV_FILE=backend/.env.demo ./scripts/backup-runtime.sh
+CONFIRM_CLEAR_TEST_DATA=1 ENV_FILE=backend/.env.demo ./scripts/clear-test-data.sh --apply
 ```
 
 `DB_PATH` 和 `UPLOADS_DIR` 都会跟随该 profile 切换，避免默认库和默认上传目录被污染。
+
+清理脚本默认只 dry-run，真正执行必须同时加 `--apply` 和 `CONFIRM_CLEAR_TEST_DATA=1`。执行时会先停止当前 profile、备份 DB/uploads、
+清空业务表和上传文件、保留 `users` 与 `schema_migrations`，最后重启当前 profile 并校验清理结果。
+脚本会拒绝未知表和异常 uploads 路径，避免后续新增业务表后漏清，或误删非上传目录。
+为降低误操作风险，清理脚本也会拒绝非 `glass*.db` 数据库文件名、拒绝非空备份目录；如果在停服务后、
+真正清理前失败，会尝试恢复原本正在运行的 profile。

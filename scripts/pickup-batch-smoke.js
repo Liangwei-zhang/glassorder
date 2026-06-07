@@ -43,6 +43,18 @@ async function login(loginName, password) {
   });
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await login(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 function headers(session) {
   return { Authorization: `Bearer ${session.token}` };
 }
@@ -71,8 +83,8 @@ async function createOrder(session, customerId, stamp, suffix) {
 }
 
 (async () => {
-  const boss = await login('bossdemo', 'boss123456');
-  const worker = await login('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const customer = await api('/api/customers', {
     method: 'POST',
@@ -102,12 +114,11 @@ async function createOrder(session, customerId, stamp, suffix) {
       piece_ids: [pickA, pickB],
       signer_name: 'Smoke Pickup',
       signer_phone: '403-555-0130',
-      signature_base64: SIG,
     }),
   });
   const batch = batchRes.batch;
-  if (!batch || batch.items.length !== 2 || !batch.slip_pdf_path) {
-    throw new Error('batch create missing items/slip');
+  if (!batch || batch.items.length !== 2 || !batch.slip_pdf_path || batch.signature_path) {
+    throw new Error('unsigned batch create missing items/slip or unexpectedly stored signature');
   }
   const afterA = await api(`/api/orders/${orderA.order.id}`, { headers: headers(boss) });
   const afterB = await api(`/api/orders/${orderB.order.id}`, { headers: headers(boss) });

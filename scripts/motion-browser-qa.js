@@ -15,6 +15,18 @@ async function loginApi(loginName, password) {
   return data;
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await loginApi(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 async function seedSession(page, session) {
   await page.goto(BASE + '/login.html', { waitUntil: 'domcontentloaded' });
   await page.evaluate(({ token, user }) => {
@@ -136,8 +148,8 @@ async function assertBossMotion(page, pagePath, label) {
 }
 
 (async () => {
-  const boss = await loginApi('bossdemo', 'boss123456');
-  const worker = await loginApi('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const browser = await chromium.launch({ headless: true });
   const errors = [];
   try {

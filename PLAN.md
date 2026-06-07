@@ -2424,3 +2424,148 @@ bash scripts/status.sh
 - `body` 会注入 `pwa-installed` / `pwa-browser` class 与 `data-app-mode`，便于继续做安装态视觉微调。
 - i18n 已补充中英文安装/离线/更新相关文案。
 - 新增 `scripts/pwa-install-qa.js` 专项验证脚本。
+
+## Phase 37：取货签字改为可选（2026-05-22）
+
+### 需求
+老板办理客户取货时，过去必须让客户手写签名才能完成取货。现在业务要求改为：
+- 可以签字，也可以不签字。
+- 不签字也能完成按片取货流程，并生成提货批次和 PDF。
+- 如果前端或接口传了签名数据，仍必须是有效 PNG，不能放松坏签名输入校验。
+
+### 任务
+- 后端 `POST /api/pickups/batches` 支持空 `signature_base64`，仅在传入签名时校验并保存签名图片。
+- 旧兼容接口 `POST /api/orders/:id/pickup` 同步支持空签名，避免遗留入口行为不一致。
+- PDF 生成逻辑在无签名时显示“未提供签名/No signature provided”，不再尝试嵌图。
+- 前端 `pickup-search.html` 不再拦截未签字提交，stepper 和提示文案改为“签字可选”。
+- QA 增加无签名批量取货覆盖，并保留坏签名返回 400 的安全回归。
+
+### 验收标准
+- 老板选择片子、填写取货人姓名、不签名，也能完成取货并进入提货批次详情。
+- 提货批次仍有 slip PDF；`signature_path` 为空时前端和后端不报错。
+- 如果传 `signature_base64: "abc"`，后端仍返回 400。
+- 现有签名取货流程继续可用。
+
+### 验证命令
+```bash
+node -c backend/routes/pickups.js backend/routes/orders.js backend/services/signature.js backend/services/pickupSlip.js backend/services/slipPdf.js frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/security-regression.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/pickup-batch-smoke.js
+bash scripts/build-i18n.sh
+cd backend && npm run smoke
+node scripts/security-regression.js
+node scripts/pickup-batch-smoke.js
+node scripts/browser-qa.js
+node scripts/pickup-batch-browser-qa.js
+node scripts/page-matrix-qa.js
+bash scripts/status.sh
+```
+
+### 验证结果
+- `bash scripts/build-i18n.sh` ✅
+- `node -c backend/routes/pickups.js backend/routes/orders.js backend/db.js backend/services/signature.js backend/services/pickupSlip.js backend/services/slipPdf.js frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js frontend/sw.js scripts/security-regression.js scripts/browser-qa.js scripts/pickup-batch-browser-qa.js scripts/pickup-batch-smoke.js` ✅
+- `ENV_FILE=backend/.env ./scripts/restart.sh` ✅，服务运行在 `http://localhost:8781`
+- `cd backend && npm run smoke` ✅
+- `node scripts/security-regression.js` ✅，坏签名仍返回 400；无签名批次可生成 slip 且 `signature_path` 为空。
+- `node scripts/pickup-batch-smoke.js` ✅，覆盖无签名批量取货成功。
+- `node scripts/browser-qa.js` ✅，浏览器取货流程不画签名也能完成。
+- `node scripts/pickup-batch-browser-qa.js` ✅，取货专项验证无签名批次不保存 `signature_path`。
+- `node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`
+- `node scripts/navigation-browser-qa.js` ✅
+- `node scripts/motion-browser-qa.js` ✅，`MOTION BROWSER QA PASS viewports=3 reduced-motion=1`
+- `node scripts/customer-search-qa.js` ✅
+- `bash scripts/status.sh` ✅，健康检查返回 `{"ok":true}`。
+
+### 完成结果
+- `POST /api/pickups/batches` 已支持无 `signature_base64` 完成取货；传坏签名仍返回 400。
+- 旧兼容 `POST /api/orders/:id/pickup` 已同步支持无签名。
+- `signature_path` 新建表默认允许空字符串；无签名批次不会生成签名图片路径。
+- 取货 PDF 无签名时显示 `No signature provided.`。
+- `pickup-search.html` 不再强制签名，签名区文案改为可选，确认按钮只要求取货人姓名。
+- QA 脚本改为默认账号优先，避免没有 demo 账号时误触发登录限流。
+- 前端资源版本提升到 `20260522-optional-signature`，PWA 版本提升到 `v44-2026-05-22-optional-signature`。
+
+## Phase 38：测试数据清理策略加固（2026-05-23）
+
+### 问题
+手工清空测试数据可以临时解决问题，但不能说 100% 有把握。审查后发现这些漏洞：
+- 备份脚本只复制主 DB 文件，WAL 模式下可能漏掉 `-wal` / `-shm` 中尚未 checkpoint 的数据。
+- 清理靠手工 Node 片段，容易漏掉后续新增业务表。
+- 清理时服务仍可能运行，存在并发写入或清理后马上被 QA 写入的风险。
+- profile 隔离不可靠：`ENV_FILE=...` 启动时后端仍读默认 `.env`，启动脚本还会误杀同项目其他 profile。
+- uploads 路径缺少保护，误配置时有误删非上传目录的风险。
+
+### 修复
+- 新增 `scripts/clear-test-data.sh`：
+  - 默认 dry-run，真正执行必须 `--apply`。
+  - 执行时先停当前 profile、备份、清业务表、清 uploads、重建上传子目录、验证结果、再重启。
+  - 保留 `users` 和 `schema_migrations`。
+  - 清空 `customers/orders/pieces/events/pickups/pickup_batches/pickup_items/pickup_batch_counters`，并重置业务自增序列。
+  - 遇到未知表直接拒绝执行，要求先审查清理范围。
+  - uploads basename 必须是 `uploads` 或 `uploads-*`，并拒绝根目录/home/项目根/backend 目录。
+- `scripts/backup-runtime.sh` 在有 `sqlite3` 时使用 `.backup`；否则复制 DB 主文件和 `-wal/-shm`。
+- `backend/server.js` 按 `ENV_FILE` 指定路径加载 env。
+- `scripts/_common.sh` 将相对 `ENV_FILE` 规范化为绝对路径。
+- `scripts/start.sh` / `scripts/stop.sh` 按当前 profile 管理进程，不再误杀同项目其他 profile。
+- README 增加清理脚本和 profile 清理说明。
+
+### 验收标准
+- 默认运行 `./scripts/clear-test-data.sh` 只输出清理范围，不停服务、不改数据。
+- `ENV_FILE=backend/.env.clear-qa ./scripts/clear-test-data.sh --apply` 能在独立 profile 上备份并清空业务数据。
+- 清理后客户、订单、片、事件、取货、取货批次、取货明细和批次计数均为 0；账号和迁移记录仍保留。
+- 清理后 uploads 文件数为 0，目录结构仍有 `orders/pdfs/signatures/slips`。
+- 清理前备份包含 DB、WAL/SHM 和 uploads，且备份库能读到清理前业务数据。
+- 异常 uploads 路径会拒绝执行。
+- 默认 profile 和独立 profile 可同时运行，互不误杀。
+
+### 验证命令
+```bash
+bash -n scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/backup-runtime.sh scripts/clear-test-data.sh
+./scripts/clear-test-data.sh
+ENV_FILE=backend/.env.clear-qa ./scripts/start.sh
+BASE=http://localhost:8783 node <seed-clear-qa>
+ENV_FILE=backend/.env.clear-qa ./scripts/clear-test-data.sh --apply
+bash scripts/status.sh
+ENV_FILE=backend/.env.clear-qa bash scripts/status.sh
+BASE=http://localhost:8783 node <verify-empty-api>
+BASE=http://localhost:8781 node <verify-default-profile>
+```
+
+### 验证结果
+- shell 语法检查通过：`bash -n scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/clear-test-data.sh scripts/backup-runtime.sh` ✅
+- 默认 profile dry-run 成功：列出清理范围和计数，不清数据、不停服务 ✅
+- 独立 profile `backend/.env.clear-qa` 与默认 profile 同时运行：8781 / 8783 健康检查均通过 ✅
+- 独立 profile 造数成功：清理前 `customers=1, orders=1, pieces=8, events=28, pickup_batches=1, pickup_items=2, upload files=19` ✅
+- `ENV_FILE=backend/.env.clear-qa ./scripts/clear-test-data.sh --apply` 成功：备份、停服务、清理、重启均完成 ✅
+- 清理后独立 profile：业务表全 0，`users=2`，`schema_migrations=6`，uploads 文件数 0 ✅
+- 默认 profile 清理前后保持空库且服务健康，没有被独立 profile 清理影响 ✅
+- 备份 `backups/20260523-145028` 包含 DB/WAL/SHM 和上传 PDF；备份库可读到清理前业务数据 ✅
+- 异常 `UPLOADS_DIR=./not-uploads-target` 被拒绝，退出码非 0 ✅
+
+### 第二轮漏洞复审与修复
+再次按“还能怎么失败”复查后，又发现并修复以下边界问题：
+- PID 文件可能指向已经复用的进程：`running_pid` 现在必须校验 cwd 和 `ENV_FILE` 都匹配当前 profile。
+- 端口被其他 profile 占用时，`start.sh` 可能把别人的健康检查当成自己启动成功：现在启动前检查端口占用，健康通过后也校验 listener 属于当前 profile。
+- 清理脚本只保护 uploads 路径，未保护 DB 路径：现在 DB basename 必须匹配 `glass*.db`，避免误清任意 sqlite 文件。
+- 指定非空备份目录会在停服务后失败，导致服务留在停止状态：现在清理失败且原服务原本运行时，会自动尝试恢复启动。
+- 备份目录混入旧文件会造成恢复判断混乱：现在备份目录必须不存在或为空。
+- 备份后没有立即验证可读性：清理脚本现在会打开备份 DB 并读取关键表，确认备份可用后才继续清理。
+
+第二轮验证：
+- `bash -n scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/backup-runtime.sh scripts/clear-test-data.sh` ✅
+- 默认 profile dry-run 仍不改数据、不停服务 ✅
+- `backend/.env.clear-qa2` 独立 profile 造数后清理成功：清理前 `customers=1, orders=1, pieces=8, pickup_batches=1, upload files=19`；清理后业务表全 0、uploads 文件数 0、账号保留 ✅
+- 备份 `backups/20260523-151434-clear/glass-clear-qa2.db` 可读，且仍包含清理前 `customers=1, orders=1, pieces=8, pickup_batches=1` ✅
+- 坏 DB 名 `business.sqlite` 被拒绝 ✅
+- 非空备份目录被拒绝，且失败后自动恢复原本运行的 clear-qa2 profile ✅
+- 端口冲突 profile 被拒绝启动，不会误判 8781 默认服务为新 profile ✅
+- 默认 8781 服务保持健康，默认库仍为空且 `users=2` ✅
+
+### 第三轮漏洞复审与修复
+继续复查“默认正式库误清”和“停服务是否真的停干净”两个风险后，新增以下保护：
+- `stop.sh` 在杀掉 pidfile 指向进程后，会继续清理同 cwd + 同 `ENV_FILE` 的额外当前 profile 进程，避免父/残留进程继续存在。
+- `--no-backup` 不再只是一个命令行参数，必须额外设置 `ALLOW_CLEAR_WITHOUT_BACKUP=1`，否则拒绝执行。
+- `--apply` 也必须额外设置 `CONFIRM_CLEAR_TEST_DATA=1`，避免误手执行 `./scripts/clear-test-data.sh --apply` 清空默认库。
+
+第三轮验证：
+- `bash -n scripts/stop.sh scripts/clear-test-data.sh scripts/_common.sh scripts/start.sh scripts/backup-runtime.sh` ✅
+- `./scripts/clear-test-data.sh --apply --no-backup --no-restart` 在未设置 `ALLOW_CLEAR_WITHOUT_BACKUP=1` 时拒绝执行，并自动恢复原本运行的默认 profile ✅
+- 默认 profile 服务恢复后健康检查正常，默认业务表仍全 0、`users=2`、`schema_migrations=6` ✅

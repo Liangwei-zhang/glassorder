@@ -23,6 +23,17 @@ async function login(name, password) {
     body: JSON.stringify({ login: name, password }),
   });
 }
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await login(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
 function auth(session) { return { Authorization: `Bearer ${session.token}` }; }
 
 async function createReadyOrder(session, customerId, stamp, suffix) {
@@ -72,7 +83,7 @@ async function draw(page) {
 }
 
 (async () => {
-  const boss = await login('bossdemo', 'boss123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
   const customer = await seedCustomerWithOrders(boss);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -98,7 +109,10 @@ async function draw(page) {
     await page.locator('[data-piece]').nth(8).check();
     await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
     await page.fill('#name', 'Browser Pickup Signer');
-    await draw(page);
+    const signatureOptionalText = await page.locator('#signatureCard').textContent();
+    if (!/可选|optional/i.test(signatureOptionalText || '')) {
+      throw new Error(`signature optional copy missing: ${signatureOptionalText}`);
+    }
     await page.click('#submitBtn');
     await page.waitForSelector('.modal-backdrop.open');
     await page.locator('.modal-backdrop.open [data-role="ok"]').click();
@@ -107,6 +121,9 @@ async function draw(page) {
       [...document.querySelectorAll('button')].some((btn) => /下载|Download/.test(btn.textContent || ''))
     ), null, { timeout: 10000 });
     const detailUrl = page.url();
+    const createdBatchId = new URL(detailUrl).searchParams.get('id');
+    const createdBatch = await api(`/api/pickups/batches/${createdBatchId}`, { headers: auth(boss) });
+    if (createdBatch.batch.signature_path) throw new Error('unsigned pickup should not store signature_path');
     const detailText = await page.locator('#body').textContent();
     if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '') || !/订单数|Orders/.test(detailText || '')) throw new Error('batch detail did not render pieces/summary');
     await page.goto(BASE + '/pickup-batches.html', { waitUntil: 'networkidle' });

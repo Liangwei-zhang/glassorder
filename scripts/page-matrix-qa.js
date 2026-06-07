@@ -26,6 +26,18 @@ async function login(loginName, password) {
   });
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await login(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 function auth(session) {
   return { Authorization: `Bearer ${session.token}` };
 }
@@ -154,8 +166,8 @@ async function checkPage(page, pagePath, expected, label) {
 }
 
 (async () => {
-  const boss = await login('bossdemo', 'boss123456');
-  const worker = await login('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const data = await createMatrixData(boss);
   const browser = await chromium.launch({ headless: true });
   const viewports = [

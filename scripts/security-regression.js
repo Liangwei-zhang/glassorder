@@ -42,6 +42,18 @@ async function login(name, password) {
   });
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await login(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 function uniquePdf(stamp) {
   return Buffer.concat([
     fs.readFileSync(SAMPLE_PDF),
@@ -87,8 +99,8 @@ async function expectBadPriority(boss, customerId, stamp) {
 
 async function main() {
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-  const boss = await login('bossdemo', 'boss123456');
-  const worker = await login('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const customer = await createCustomer(boss, stamp);
   await expectBadPriority(boss, customer.id, stamp);
   const order = await createOrder(boss, customer.id, stamp);
@@ -143,6 +155,17 @@ async function main() {
   await expectStatus('anonymous signature forbidden', batch.signature_path, 401);
   await expectStatus('worker signature forbidden', batch.signature_path, 403, { headers: auth(worker) });
   await expectStatus('boss signature allowed', batch.signature_path, 200, { headers: auth(boss) });
+
+  const noSignatureBatchData = await api('/api/pickups/batches', {
+    method: 'POST',
+    headers: { ...auth(boss), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ piece_ids: [pieceIds[1]], signer_name: 'No Signature Signer' }),
+  });
+  const noSignatureBatch = noSignatureBatchData.batch;
+  if (!noSignatureBatch || !noSignatureBatch.slip_pdf_path || noSignatureBatch.signature_path) {
+    throw new Error(`unsigned pickup batch should create slip without signature_path: ${JSON.stringify(noSignatureBatch)}`);
+  }
+  await expectStatus('unsigned slip boss allowed', noSignatureBatch.slip_pdf_path, 200, { headers: auth(boss) });
 
   console.log(`SECURITY REGRESSION PASS order=${order.id} batch=${batch.id}`);
 }

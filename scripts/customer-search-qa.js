@@ -19,7 +19,7 @@ async function login() {
   return api('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ login: 'bossdemo', password: 'boss123456' }),
+    body: JSON.stringify({ login: 'admin', password: 'admin123' }),
   });
 }
 

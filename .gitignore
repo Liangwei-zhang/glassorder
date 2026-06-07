@@ -6,11 +6,15 @@ backend/.env.*
 backend/logs/
 .claude/
 memory/
+.trash/
+backups/
 *.zip
 
 # Runtime data
 backend/glass.db
 backend/glass.db-*
+backend/*.db-shm
+backend/*.db-wal
 backend/uploads/**
 !backend/uploads/
 !backend/uploads/.gitkeep

@@ -15,6 +15,18 @@ async function loginApi(loginName, password) {
   return data;
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const item of candidates) {
+    try {
+      return await loginApi(item[0], item[1]);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 async function seedSession(page, session) {
   await page.goto(BASE + '/login.html', { waitUntil: 'domcontentloaded' });
   await page.evaluate(({ token, user }) => {
@@ -53,8 +65,8 @@ async function loginViaUi(page, loginName, password, expectedUrl) {
 }
 
 (async () => {
-  const boss = await loginApi('bossdemo', 'boss123456');
-  const worker = await loginApi('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await context.newPage();
@@ -63,7 +75,7 @@ async function loginViaUi(page, loginName, password, expectedUrl) {
   page.on('pageerror', err => errors.push(err.message));
 
   try {
-    await loginViaUi(page, 'bossdemo', 'boss123456', /boss-dashboard\.html$/);
+    await loginViaUi(page, 'admin', 'admin123', /boss-dashboard\.html$/);
     await assertBossNav(page, '订单', 'boss dashboard');
 
     await page.goto(BASE + '/index.html', { waitUntil: 'domcontentloaded' });
@@ -86,7 +98,7 @@ async function loginViaUi(page, loginName, password, expectedUrl) {
     await page.waitForURL(/worker-queue\.html$/);
     await assertBossNav(page, '车间', 'boss shop nav');
 
-    await loginViaUi(page, 'workerdemo', 'worker123456', /worker-queue\.html$/);
+    await loginViaUi(page, 'worker', 'worker123', /worker-queue\.html$/);
     await page.waitForSelector('.topbar-title');
     const workerNavCount = await page.locator('.bottom-nav').count();
     if (workerNavCount !== 0) throw new Error(`worker should not see bottom nav, got ${workerNavCount}`);

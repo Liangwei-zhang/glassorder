@@ -26,4 +26,10 @@ function decodePngSignature(signatureBase64) {
   return { buffer };
 }
 
-module.exports = { decodePngSignature };
+function decodeOptionalPngSignature(signatureBase64) {
+  const raw = String(signatureBase64 || '').trim();
+  if (!raw) return { buffer: null };
+  return decodePngSignature(raw);
+}
+
+module.exports = { decodePngSignature, decodeOptionalPngSignature };

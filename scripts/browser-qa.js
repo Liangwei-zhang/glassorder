@@ -360,7 +360,10 @@ async function main() {
       await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
       await page.fill('#name', 'Browser QA Signer');
       await page.fill('#phone', '403-555-1212');
-      await drawSignature(page);
+      const signatureOptionalText = await page.locator('#signatureCard').textContent();
+      if (!/可选|optional/i.test(signatureOptionalText || '')) {
+        throw new Error(`pickup signature should be optional: ${signatureOptionalText}`);
+      }
       await page.locator('#submitBtn').click();
       await page.waitForSelector('.modal-backdrop.open');
       const pickupModal = await page.locator('.modal-backdrop.open').textContent();
@@ -369,6 +372,9 @@ async function main() {
       }
       await page.locator('.modal-backdrop.open [data-role="ok"]').click();
       await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
+      const createdBatchId = new URL(page.url()).searchParams.get('id');
+      const unsignedBatch = await api(`/api/pickups/batches/${createdBatchId}`, { headers: authHeaders(session) });
+      if (unsignedBatch.batch.signature_path) throw new Error('unsigned browser pickup should not store signature_path');
       const batchText = await page.locator('#body').textContent();
       if (!/第 1 片|Piece #1/.test(batchText || '') || !/第 3 片|Piece #3/.test(batchText || '') || !/订单数|Orders/.test(batchText || '')) {
         throw new Error('Q4 piece-level pickup batch detail missing selected pieces');

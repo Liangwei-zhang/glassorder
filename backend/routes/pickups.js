@@ -5,7 +5,7 @@ const db = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { createPickupBatchSlip } = require('../services/pickupSlip');
 const { syncOrderStatusFromPieces } = require('../services/orderStatus');
-const { decodePngSignature } = require('../services/signature');
+const { decodeOptionalPngSignature } = require('../services/signature');
 
 const router = express.Router();
 const uploadsBase = (db.runtime && db.runtime.uploadsBase)
@@ -224,7 +224,7 @@ router.post('/batches', requireRole('boss'), async (req, res, next) => {
     if (!pieceIds.length) return res.status(400).json({ error: 'piece_ids are required' });
     const signerName = String(req.body.signer_name || '').trim();
     if (!signerName) return res.status(400).json({ error: 'signer_name is required' });
-    const decodedSignature = decodePngSignature(req.body.signature_base64);
+    const decodedSignature = decodeOptionalPngSignature(req.body.signature_base64);
     if (decodedSignature.error) return res.status(400).json({ error: decodedSignature.error });
     const signatureBuffer = decodedSignature.buffer;
 
@@ -263,13 +263,17 @@ router.post('/batches', requireRole('boss'), async (req, res, next) => {
     };
     const signatureDir = path.join(uploadsBase, 'signatures');
     const slipDir = path.join(uploadsBase, 'slips');
-    fs.mkdirSync(signatureDir, { recursive: true });
     fs.mkdirSync(slipDir, { recursive: true });
     const batchNumber = db.transaction(() => nextBatchNumber())();
     const fileToken = `${Date.now()}-${process.hrtime.bigint().toString(36)}`;
-    const signatureFile = `signature-${batchNumber}-${fileToken}.png`;
-    const signaturePath = path.join(signatureDir, signatureFile);
-    fs.writeFileSync(signaturePath, signatureBuffer);
+    let signatureFile = '';
+    let signaturePath = '';
+    if (signatureBuffer) {
+      fs.mkdirSync(signatureDir, { recursive: true });
+      signatureFile = `signature-${batchNumber}-${fileToken}.png`;
+      signaturePath = path.join(signatureDir, signatureFile);
+      fs.writeFileSync(signaturePath, signatureBuffer);
+    }
 
     const slipFile = `pickup-${batchNumber}-${fileToken}.pdf`;
     const slipPath = path.join(slipDir, slipFile);
@@ -294,7 +298,7 @@ router.post('/batches', requireRole('boss'), async (req, res, next) => {
         customer.id,
         signerName,
         req.body.signer_phone || null,
-        `/uploads/signatures/${signatureFile}`,
+        signatureFile ? `/uploads/signatures/${signatureFile}` : '',
         `/uploads/slips/${slipFile}`,
         req.user.id,
       );

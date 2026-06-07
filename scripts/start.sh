@@ -14,25 +14,6 @@ if pid=$(running_pid); then
   exit 0
 fi
 
-# Kill any orphan 'node server.js' tied to this backend dir (no pidfile match)
-orphans=$(pgrep -af "node server.js" 2>/dev/null | awk -v d="$BACKEND_DIR" '
-  $0 ~ d {print $1}
-' || true)
-# Fallback: pgrep may not match; check cwd of every node server.js process
-for p in $(pgrep -f "node server.js" 2>/dev/null || true); do
-  cwd=$(readlink -f "/proc/$p/cwd" 2>/dev/null || true)
-  if [ "$cwd" = "$BACKEND_DIR" ]; then
-    orphans+=$'\n'"$p"
-  fi
-done
-orphans=$(echo "${orphans:-}" | sort -u | grep -E '^[0-9]+$' || true)
-if [ -n "${orphans:-}" ]; then
-  echo "Killing orphan backend processes: $(echo "$orphans" | tr '\n' ' ')"
-  echo "$orphans" | xargs -r kill 2>/dev/null || true
-  sleep 0.4
-  echo "$orphans" | xargs -r kill -9 2>/dev/null || true
-fi
-
 # Install deps only if missing
 if [ ! -d "$BACKEND_DIR/node_modules" ]; then
   echo "Installing dependencies (first run)..."
@@ -72,25 +53,52 @@ fi
 PORT="$(port_from_env)"; PORT="${PORT:-8781}"
 URL="$(health_url "$PORT")"
 
+existing_profile_pids="$(profile_pids | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+if [ -n "$existing_profile_pids" ]; then
+  for p in $existing_profile_pids; do
+    if pid_listens_on_port "$p" "$PORT"; then
+      echo "$p" > "$PID_FILE"
+      echo "Already running (pid=$p). Use ./scripts/restart.sh to restart."
+      exit 0
+    fi
+  done
+  echo "Killing stale current-profile backend processes: $existing_profile_pids"
+  echo "$existing_profile_pids" | xargs -r kill 2>/dev/null || true
+  sleep 0.4
+  echo "$existing_profile_pids" | xargs -r kill -9 2>/dev/null || true
+fi
+
+existing_listener="$(listening_pid "$PORT")"
+if [ -n "$existing_listener" ]; then
+  echo "ERROR port $PORT is already used by pid=$existing_listener and it is not this profile." >&2
+  exit 1
+fi
+
 if [ "$FG" = "1" ]; then
   echo "Starting in foreground on port $PORT..."
-  exec env -C "$BACKEND_DIR" npm start
+  exec env ENV_FILE="$ENV_FILE" -C "$BACKEND_DIR" node server.js
 fi
 
 echo "Starting on port $PORT..."
 cd "$BACKEND_DIR"
-setsid node server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+setsid env ENV_FILE="$ENV_FILE" node server.js >> "$LOG_FILE" 2>&1 < /dev/null &
 NODE_PID=$!
 disown "$NODE_PID" 2>/dev/null || true
 
 if wait_health "$URL" 40; then
   LISTENER_PID=$(listening_pid "$PORT")
-  [ -n "$LISTENER_PID" ] && NODE_PID="$LISTENER_PID"
+  if [ -n "$LISTENER_PID" ]; then
+    if pid_matches_profile "$LISTENER_PID"; then
+      NODE_PID="$LISTENER_PID"
+    else
+      echo "ERROR health check responded on $URL, but listener pid=$LISTENER_PID is not this profile." >&2
+      exit 1
+    fi
+  fi
   if [ -z "$NODE_PID" ]; then
-    # fallback: any node server.js rooted in BACKEND_DIR
+    # fallback: any node server.js rooted in BACKEND_DIR with this ENV_FILE
     for p in $(pgrep -f "node server.js" 2>/dev/null || true); do
-      cwd=$(readlink -f "/proc/$p/cwd" 2>/dev/null || true)
-      if [ "$cwd" = "$BACKEND_DIR" ]; then
+      if pid_matches_profile "$p"; then
         NODE_PID="$p"; break
       fi
     done

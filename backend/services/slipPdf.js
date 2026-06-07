@@ -30,6 +30,9 @@ function createPickupSlip({ order, pieces, signerName, signerPhone, signaturePat
   doc.text('Signature:');
   if (signaturePath && fs.existsSync(signaturePath)) {
     doc.image(signaturePath, { fit: [220, 90] });
+  } else {
+    doc.fontSize(10).fillColor('#555').text('No signature provided.');
+    doc.fillColor('black');
   }
 
   doc.end();

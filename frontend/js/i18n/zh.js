@@ -338,6 +338,7 @@ window.__I18N_ZH__ = {
     downloadPdfBtn: '下载 PDF',
     contactPhone: '联系电话',
     customerSign: '客户签名',
+    customerSignOptional: '客户签名（可选）',
     signHere: '请在上方白色区域手写签名',
     pickupConfirmTitle: '确认为 {name} 办理取货？',
     pickupConfirmBody: '订单 #{n} 将被标记为已取货，无法回退。',
@@ -346,6 +347,7 @@ window.__I18N_ZH__ = {
     creatingSlip: '生成凭证中...',
     pickupConfirmBtn: '确认取货',
     pickupSelectedConfirmN: '确认取货 · 已选 {n} 片',
+    pickupSignatureOptionalHintN: '已选 {n} 片。签名可选；填写取货人姓名即可确认。',
     pickupReadyState: '可取',
     pickupNotReadyState: '不可取',
     statusWord: '状态',
@@ -358,7 +360,8 @@ window.__I18N_ZH__ = {
     pickupStepCustomer: '客户',
     pickupStepPieces: '选片',
     pickupStepSign: '签字',
-    pickupSelectedHintN: '已选 {n} 片，下一步请填写取货人并签字',
+    pickupStepConfirm: '确认',
+    pickupSelectedHintN: '已选 {n} 片，填写取货人即可确认；签字可选',
 
     // menu items
     menuEditOrder: '修改订单',

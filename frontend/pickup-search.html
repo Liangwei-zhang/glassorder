@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260521-worker-context-card">
+<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
 </head>
 <body>
 <div class="topbar">
@@ -26,7 +26,7 @@
     <input class="form-input" id="name" data-i18n-placeholder="signerNamePh" placeholder="如: 张师傅">
     <label class="form-label" style="margin-top:12px;" data-i18n="contactPhone">联系电话</label>
     <input class="form-input" id="phone" data-i18n-placeholder="signerPhonePh" placeholder="可选">
-    <label class="form-label" style="margin-top:12px;" data-i18n="customerSign">客户签名</label>
+    <label class="form-label" style="margin-top:12px;" data-i18n="customerSignOptional">客户签名（可选）</label>
     <canvas id="sig" class="sig-pad" style="margin-top:8px; height:180px;"></canvas>
     <button class="btn btn-ghost" type="button" onclick="clearSig()" style="margin-top:8px; min-height:0; padding:8px 12px;" data-i18n="clearSig">清空</button>
   </div>
@@ -39,8 +39,8 @@
   </button>
 </div>
 
-<script src="js/api.js?v=20260521-worker-context-card"></script>
-<script src="js/i18n.js?v=20260521-worker-context-card"></script>
+<script src="js/api.js?v=20260522-optional-signature"></script>
+<script src="js/i18n.js?v=20260522-optional-signature"></script>
 <script>
 const allowed = requireRolePage('boss');
 const params = new URLSearchParams(location.search);
@@ -140,10 +140,11 @@ function togglePiece(id, on) {
 function updatePickupFlow() {
   const hasCustomer = Boolean(customerPicker && customerPicker.getValue());
   const hasPieces = selected.size > 0;
+  const hasSignerName = Boolean(document.getElementById('name').value.trim());
   const steps = [
     { number: 1, label: t('pickupStepCustomer'), done: hasCustomer },
     { number: 2, label: t('pickupStepPieces'), done: hasPieces },
-    { number: 3, label: t('pickupStepSign'), done: hasPieces && !signatureEmpty },
+    { number: 3, label: t('pickupStepConfirm'), done: hasPieces && hasSignerName },
   ];
   steps.forEach((step, index) => {
     step.active = !step.done && ((index === 0 && !hasCustomer) || (index === 1 && hasCustomer && !hasPieces) || (index === 2 && hasPieces));
@@ -156,7 +157,7 @@ function updatePickupFlow() {
   const intro = document.getElementById('signatureIntro');
   if (intro) {
     intro.textContent = hasPieces
-      ? tn('pickupSelectedConfirmN', { n: selected.size })
+      ? tn('pickupSignatureOptionalHintN', { n: selected.size })
       : '';
   }
   const summary = document.getElementById('selectedSummary');
@@ -221,12 +222,12 @@ canvas.addEventListener('touchstart', start, { passive:false });
 canvas.addEventListener('touchmove', move, { passive:false });
 canvas.addEventListener('touchend', end);
 canvas.addEventListener('touchcancel', end);
+document.getElementById('name').addEventListener('input', updatePickupFlow);
 
 async function submitBatch(ev) {
   const name = document.getElementById('name').value.trim();
   if (!selected.size) return toast(t('selectFirst'), { type:'danger' });
   if (!name) return toast(t('sigEmptyName'), { type:'danger' });
-  if (signatureEmpty) return toast(t('sigEmptySign'), { type:'danger' });
   const ok = await confirmModal({
     title: tn('pickupConfirmTitle', { name }),
     body: tn('pickupBatchConfirmBody', { n: selected.size }),
@@ -235,14 +236,15 @@ async function submitBatch(ev) {
   if (!ok) return;
   const btn = ev && ev.currentTarget;
   await withBusy(btn, async () => {
+    const body = {
+      piece_ids: [...selected],
+      signer_name: name,
+      signer_phone: document.getElementById('phone').value.trim(),
+    };
+    if (!signatureEmpty) body.signature_base64 = canvas.toDataURL('image/png');
     const data = await api('/api/pickups/batches', {
       method: 'POST',
-      body: {
-        piece_ids: [...selected],
-        signer_name: name,
-        signer_phone: document.getElementById('phone').value.trim(),
-        signature_base64: canvas.toDataURL('image/png'),
-      },
+      body,
     });
     location.href = 'pickup-batch-detail.html?id=' + data.batch.id;
   });

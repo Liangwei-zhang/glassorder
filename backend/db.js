@@ -85,7 +85,7 @@ function migrateDb() {
             customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
             signer_name TEXT NOT NULL,
             signer_phone TEXT,
-            signature_path TEXT NOT NULL,
+            signature_path TEXT NOT NULL DEFAULT '',
             slip_pdf_path TEXT NOT NULL,
             picked_at TEXT NOT NULL DEFAULT (datetime('now')),
             picked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -235,7 +235,7 @@ function initDb() {
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
       signer_name TEXT NOT NULL,
       signer_phone TEXT,
-      signature_path TEXT NOT NULL,
+      signature_path TEXT NOT NULL DEFAULT '',
       slip_pdf_path TEXT NOT NULL,
       picked_at TEXT NOT NULL DEFAULT (datetime('now')),
       picked_by INTEGER REFERENCES users(id) ON DELETE SET NULL

@@ -588,7 +588,7 @@ initNativeContextMenuGuard();
 if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   // One-shot cache nuke for this release — guarantees stale 'stale-while-revalidate'
   // caches from earlier SW versions cannot serve outdated HTML.
-  const NUKE_KEY = '__sw_nuke_2026_05_21_worker_context_card__';
+  const NUKE_KEY = '__sw_nuke_2026_05_22_optional_signature__';
   if (!localStorage.getItem(NUKE_KEY)) {
     localStorage.setItem(NUKE_KEY, '1');
     if (window.caches && caches.keys) {
