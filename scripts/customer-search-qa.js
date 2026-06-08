@@ -36,7 +36,7 @@ async function createReadyOrder(session, customerId, stamp, suffix) {
   form.set('customer_id', String(customerId));
   form.set('priority', 'normal');
   form.set('deadline', '2026-05-30');
-  form.set('pdf', new File([pdf], `customer-quick-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([pdf], `Glass Order - 260608 Customer Quick PO CUST-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers: auth(session), body: form });
   const detail = await api(`/api/orders/${created.order.id}`, { headers: auth(session) });
   await api('/api/pieces/batch', {

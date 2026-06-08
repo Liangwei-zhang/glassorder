@@ -6,6 +6,7 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { createPickupBatchSlip } = require('../services/pickupSlip');
 const { syncOrderStatusFromPieces } = require('../services/orderStatus');
 const { decodeOptionalPngSignature } = require('../services/signature');
+const { poLookupKeys } = require('../services/poCode');
 
 const router = express.Router();
 const uploadsBase = (db.runtime && db.runtime.uploadsBase)
@@ -24,6 +25,11 @@ function insertEvent(orderId, pieceId, actorId, action, details) {
 function safeInt(value) {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function queryString(value) {
+  if (Array.isArray(value)) return String(value[0] || '').trim();
+  return String(value || '').trim();
 }
 
 function batchPrefix() {
@@ -64,7 +70,14 @@ function nextBatchNumber() {
   return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
 
-function availableRows(customerId) {
+function availableRows(customerId, poKeys = []) {
+  const poFilter = poKeys.length
+    ? `AND o.order_number_key IN (${poKeys.map((_, index) => `@po_key_${index}`).join(', ')})`
+    : '';
+  const params = { customer_id: customerId };
+  poKeys.forEach((key, index) => {
+    params[`po_key_${index}`] = key;
+  });
   return db.prepare(`
     SELECT
       p.*,
@@ -79,13 +92,14 @@ function availableRows(customerId) {
     FROM pieces p
     JOIN orders o ON o.id = p.order_id
     JOIN customers c ON c.id = o.customer_id
-    WHERE o.customer_id = ?
+    WHERE o.customer_id = @customer_id
       AND o.archived_at IS NULL
+      ${poFilter}
       AND p.stage = 'finished'
       AND p.hold = 0
       AND p.picked_up_at IS NULL
     ORDER BY o.deadline IS NULL, o.deadline, o.created_at, o.id, p.piece_no
-  `).all(customerId);
+  `).all(params);
 }
 
 function groupAvailable(rows) {
@@ -151,10 +165,12 @@ function getBatch(batchId) {
 router.get('/available', requireRole('boss'), (req, res) => {
   const customerId = safeInt(req.query.customer_id);
   if (!customerId) return res.status(400).json({ error: 'customer_id is required' });
+  const po = queryString(req.query.po);
+  const poKeys = po ? poLookupKeys(po) : [];
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
-  const rows = availableRows(customerId);
-  res.json({ customer, orders: groupAvailable(rows), pieces: rows, total_pieces: rows.length });
+  const rows = availableRows(customerId, poKeys);
+  res.json({ customer, orders: groupAvailable(rows), pieces: rows, total_pieces: rows.length, po: po || null });
 });
 
 router.get('/available/all', requireRole('boss'), (req, res) => {

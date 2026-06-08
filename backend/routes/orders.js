@@ -10,6 +10,7 @@ const { parsePdf } = require('../services/pdfParser');
 const { createPickupSlip } = require('../services/slipPdf');
 const { sendPickupEmail } = require('../services/mailer');
 const { decodeOptionalPngSignature } = require('../services/signature');
+const { extractPoCodeFromFilename, poCodeKey, poLookupKeys } = require('../services/poCode');
 const {
   completedStepsJSON,
   hydratePieceWorkflow,
@@ -79,18 +80,6 @@ function safeSegment(value) {
     .replace(/^-|-$/g, '') || 'order';
 }
 
-function uniqueOrderNumber(base) {
-  const cleanBase = safeSegment(base || `order-${Date.now()}`);
-  const exists = (value) => db.prepare('SELECT id FROM orders WHERE order_number = ?').get(value);
-  if (!exists(cleanBase)) return cleanBase;
-
-  for (let i = 2; i < 1000; i += 1) {
-    const candidate = `${cleanBase}-${i}`;
-    if (!exists(candidate)) return candidate;
-  }
-  return `${cleanBase}-${Date.now()}`;
-}
-
 function insertEvent(orderId, pieceId, actorId, action, details) {
   db.prepare(`
     INSERT INTO events (order_id, piece_id, actor_id, action, details)
@@ -112,6 +101,7 @@ function orderSelect() {
       c.contact_name,
       c.phone AS customer_phone,
       c.email AS customer_email,
+      c.email_cc AS customer_email_cc,
       COUNT(p.id) AS total_pieces,
       SUM(CASE WHEN p.stage = 'finished' THEN 1 ELSE 0 END) AS finished_pieces,
       SUM(CASE WHEN p.rework = 1 THEN 1 ELSE 0 END) AS rework_pieces,
@@ -341,9 +331,20 @@ router.get('/', requireRole('boss'), (req, res) => {
     addFuzzySearch(where, params, search);
   }
   const orderNumber = queryString(req.query.order_number);
-  if (orderNumber) {
+  const po = queryString(req.query.po);
+  const exactOrderNumber = po || orderNumber;
+  if (exactOrderNumber) {
+    const keys = poLookupKeys(exactOrderNumber);
     where.push('o.order_number = @order_number');
-    params.order_number = orderNumber;
+    params.order_number = exactOrderNumber;
+    if (keys.length) {
+      const keyParams = keys.map((key, index) => {
+        const name = `order_number_key_${index}`;
+        params[name] = key;
+        return `@${name}`;
+      });
+      where[where.length - 1] = `(o.order_number = @order_number OR o.order_number_key IN (${keyParams.join(', ')}))`;
+    }
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -489,14 +490,15 @@ router.post('/:id/pickup', requireRole('boss'), async (req, res, next) => {
 
     let signatureFile = '';
     let signaturePath = '';
+    const fileOrderCode = safeSegment(order.order_number);
     if (signatureBuffer) {
       fs.mkdirSync(signatureDir, { recursive: true });
-      signatureFile = `signature-${order.order_number}-${Date.now()}.png`;
+      signatureFile = `signature-${fileOrderCode}-${Date.now()}.png`;
       signaturePath = path.join(signatureDir, signatureFile);
       fs.writeFileSync(signaturePath, signatureBuffer);
     }
 
-    const slipFile = `pickup-${order.order_number}-${Date.now()}.pdf`;
+    const slipFile = `pickup-${fileOrderCode}-${Date.now()}.pdf`;
     const slipPath = path.join(slipDir, slipFile);
     await createPickupSlip({
       order,
@@ -540,6 +542,7 @@ router.post('/:id/pickup', requireRole('boss'), async (req, res, next) => {
       order,
       slipPath,
       to: order.customer_email,
+      cc: order.customer_email_cc,
     });
 
     res.json({
@@ -582,9 +585,15 @@ router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
 
   const slipPath = path.join(uploadsBase, pickup.slip_pdf_path.replace(/^\/uploads\//, ''));
   if (!fs.existsSync(slipPath)) return res.status(400).json({ error: 'Pickup slip file is missing' });
-  const mail = sendPickupEmail({ order, slipPath, to: order.customer_email });
+  const mail = sendPickupEmail({
+    order,
+    slipPath,
+    to: order.customer_email,
+    cc: order.customer_email_cc,
+  });
   insertEvent(order.id, null, req.user.id, 'pickup_slip_sent', {
     to: order.customer_email,
+    cc: order.customer_email_cc || null,
     skipped: Boolean(mail.skipped),
     reason: mail.reason || null,
   });
@@ -623,12 +632,54 @@ function fail(status, message) {
   throw err;
 }
 
+function failWithCode(status, message, code, extra = {}) {
+  const err = new Error(message);
+  err.status = status;
+  err.expose = true;
+  err.apiCode = code;
+  err.apiExtra = extra;
+  throw err;
+}
+
+function poLabel(value) {
+  const code = String(value || '').trim();
+  if (!code) return 'PO';
+  return /^PO\b/i.test(code) ? code : `PO ${code}`;
+}
+
 router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
   const uploadedPdf = req.file ? req.file.path : null;
   let tempOutputDir = null;
+  let finalOutputDir = null;
+  let createdOrderId = null;
   let orderInserted = false;
   try {
     if (!req.file) fail(400, 'pdf is required');
+    const orderNumber = extractPoCodeFromFilename(req.file.originalname);
+    const orderNumberKey = poCodeKey(orderNumber);
+    if (!orderNumber || !orderNumberKey) {
+      failWithCode(
+        400,
+        'Cannot identify PO from PDF filename. Please rename the PDF using the Glass Order - YYMMDD ... PO format.',
+        'PO_FILENAME_INVALID',
+        { filename: req.file.originalname || '' },
+      );
+    }
+
+    const duplicatePo = db.prepare(`
+      SELECT id, order_number FROM orders WHERE order_number_key = ?
+    `).get(orderNumberKey);
+    if (duplicatePo) {
+      silentRm(uploadedPdf);
+      return res.status(409).json({
+        error: `${poLabel(orderNumber)} already exists. Please rename the PDF and upload again.`,
+        code: 'DUPLICATE_PO',
+        po: orderNumber,
+        order_id: duplicatePo.id,
+        order_number: duplicatePo.order_number,
+      });
+    }
+
     const sourceFileHash = fileHash(req.file.path);
     const duplicate = db.prepare(`
       SELECT id, order_number FROM orders WHERE source_file_hash = ?
@@ -664,20 +715,19 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
       fail(422, `PDF parsing failed: expected ${parsed.total} pieces but parsed ${parsed.pieces.length}`);
     }
 
-    const orderNumber = uniqueOrderNumber(req.body.order_number || parsed.orderNumber);
-
     const tx = db.transaction(() => {
       const orderInfo = db.prepare(`
         INSERT INTO orders (
-          order_number, customer_id, project_name, priority, status,
+          order_number, order_number_key, customer_id, project_name, priority, status,
           deadline, pdf_path, note, created_by, source_file_hash, original_filename
         )
         VALUES (
-          @order_number, @customer_id, @project_name, @priority, 'in_production',
+          @order_number, @order_number_key, @customer_id, @project_name, @priority, 'in_production',
           @deadline, @pdf_path, @note, @created_by, @source_file_hash, @original_filename
         )
       `).run({
         order_number: orderNumber,
+        order_number_key: orderNumberKey,
         customer_id: customerId,
         project_name: req.body.project_name || parsed.projectName || null,
         priority,
@@ -692,10 +742,11 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
     });
 
     const orderId = tx();
+    createdOrderId = orderId;
     orderInserted = true;
 
     const orderDirName = `${safeSegment(orderNumber)}-${orderId}`;
-    const finalOutputDir = path.join(orderUploadsDir, orderDirName);
+    finalOutputDir = path.join(orderUploadsDir, orderDirName);
     const finalPublicBase = `/uploads/orders/${orderDirName}`;
 
     if (fs.existsSync(finalOutputDir)) {
@@ -758,9 +809,28 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
     return res.status(201).json({ order, pieces });
   } catch (err) {
-    if (!orderInserted) {
-      silentRm(uploadedPdf);
-      silentRm(tempOutputDir);
+    if (orderInserted && createdOrderId) {
+      try {
+        db.prepare('DELETE FROM orders WHERE id = ?').run(createdOrderId);
+      } catch (cleanupErr) {
+        /* ignore cleanup failure and surface the original error */
+      }
+    }
+    silentRm(uploadedPdf);
+    silentRm(tempOutputDir);
+    silentRm(finalOutputDir);
+    if (err && err.apiCode) {
+      return res.status(err.status || 400).json({
+        error: err.message,
+        code: err.apiCode,
+        ...(err.apiExtra || {}),
+      });
+    }
+    if (err && err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({
+        error: 'This PO already exists. Please rename the PDF and upload again.',
+        code: 'DUPLICATE_PO',
+      });
     }
     return next(err);
   }

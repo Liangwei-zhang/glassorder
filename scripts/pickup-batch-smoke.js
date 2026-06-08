@@ -69,7 +69,7 @@ async function createOrder(session, customerId, stamp, suffix) {
   form.set('priority', 'normal');
   form.set('deadline', '2026-05-30');
   form.set('note', `pickup batch smoke ${suffix}`);
-  form.set('pdf', new File([pdf], `pickup-batch-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([pdf], `Glass Order - 260606 Pickup Batch PO PBS-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers: headers(session), body: form });
   const detail = await api(`/api/orders/${created.order.id}`, { headers: headers(session) });
   const pieceIds = detail.order.pieces.map((piece) => piece.id);

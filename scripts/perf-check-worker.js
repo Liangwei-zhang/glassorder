@@ -5,7 +5,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE || 'http://localhost:8781';
-const WORKFLOW_STEPS = ['cut', 'edge', 'tempered'];
+const WORKFLOW_STEPS = ['cut', 'edge', 'tempered', 'polish'];
 const ROOT = path.join(__dirname, '..');
 const SAMPLE_PDF = path.join(ROOT, 'Glass Order - 2605011 Inspire --8 Heritage Cove.pdf');
 
@@ -59,7 +59,7 @@ async function createPerfOrder(headers) {
   form.set('customer_id', String(customerRes.customer.id));
   form.set('priority', 'normal');
   form.set('deadline', '2026-05-30');
-  form.set('pdf', new File([pdf], `perf-${stamp}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([pdf], `Glass Order - 260609 Perf QA PO PERF-${stamp}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers, body: form });
   const detail = await api(`/api/orders/${created.order.id}`, { headers });
   const piece = detail.order.pieces.find((p) => p.stage !== 'finished' && !p.hold && p.next_step);

@@ -24,34 +24,34 @@ if (!sharp) {
 const ICONS_DIR = path.join(__dirname, '..', 'frontend', 'icons');
 fs.mkdirSync(ICONS_DIR, { recursive: true });
 
-// Brand-aligned: dark factory glyph on warm white. Stripe-like.
-const baseSvg = (size, padding) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-  <rect width="${size}" height="${size}" rx="${size * 0.22}" fill="#18181b"/>
-  <g transform="translate(${size / 2}, ${size / 2}) scale(${(size - padding * 2) / 24})" stroke="#fafaf9" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <g transform="translate(-12, -12)">
-      <path d="M2 20V8l6 4V8l6 4V8l6 4v8z" fill="rgba(250,250,249,.06)"/>
-      <path d="M2 20V8l6 4V8l6 4V8l6 4v8z"/>
-      <path d="M2 20h20"/>
-    </g>
-  </g>
+function logoSvg(size, { maskable = false } = {}) {
+  const radius = maskable ? 0 : Math.round(size * 0.22);
+  const margin = maskable ? size * 0.11 : size * 0.08;
+  const paneX = margin;
+  const paneY = size * 0.18;
+  const paneW = size - margin * 2;
+  const paneH = size * 0.58;
+  const paneR = size * 0.055;
+  const line = Math.max(4, size * 0.018);
+  const fontSize = size * 0.29;
+  const subFont = size * 0.067;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+  <rect width="${size}" height="${size}" rx="${radius}" fill="#111827"/>
+  <path d="M0 ${size * 0.72} C ${size * 0.22} ${size * 0.58}, ${size * 0.78} ${size * 0.90}, ${size} ${size * 0.68} L ${size} ${size} L 0 ${size} Z" fill="#0f766e" opacity=".72"/>
+  <rect x="${paneX}" y="${paneY}" width="${paneW}" height="${paneH}" rx="${paneR}" fill="#f8fafc"/>
+  <rect x="${paneX + line * 1.6}" y="${paneY + line * 1.6}" width="${paneW - line * 3.2}" height="${paneH - line * 3.2}" rx="${paneR * 0.65}" fill="#dff7fb"/>
+  <path d="M${paneX + paneW * 0.16} ${paneY + paneH * 0.16} L${paneX + paneW * 0.64} ${paneY + paneH * 0.16} L${paneX + paneW * 0.30} ${paneY + paneH * 0.54} L${paneX + paneW * 0.72} ${paneY + paneH * 0.54}" fill="none" stroke="#ffffff" stroke-width="${line}" stroke-linecap="round" opacity=".76"/>
+  <path d="M${paneX + paneW * 0.16} ${paneY + paneH * 0.74} H${paneX + paneW * 0.84}" stroke="#14b8a6" stroke-width="${line * 0.95}" stroke-linecap="round"/>
+  <text x="${size / 2}" y="${paneY + paneH * 0.58}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="900" letter-spacing="0" fill="#111827">GO</text>
+  <text x="${size / 2}" y="${size * 0.88}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${subFont}" font-weight="800" letter-spacing="0" fill="#f8fafc">GLASS ORDER</text>
 </svg>`;
-
-// Maskable: solid background tile with safe zone
-const maskableSvg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-  <rect width="${size}" height="${size}" fill="#18181b"/>
-  <g transform="translate(${size / 2}, ${size / 2}) scale(${size / 36})" stroke="#fafaf9" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <g transform="translate(-12, -12)">
-      <path d="M2 20V8l6 4V8l6 4V8l6 4v8z"/>
-      <path d="M2 20h20"/>
-    </g>
-  </g>
-</svg>`;
+}
 
 (async () => {
   for (const [name, svg] of [
-    ['icon-192.png', baseSvg(192, 28)],
-    ['icon-512.png', baseSvg(512, 72)],
-    ['icon-maskable-512.png', maskableSvg(512)],
+    ['icon-192.png', logoSvg(192)],
+    ['icon-512.png', logoSvg(512)],
+    ['icon-maskable-512.png', logoSvg(512, { maskable: true })],
   ]) {
     const out = path.join(ICONS_DIR, name);
     await sharp(Buffer.from(svg)).png().toFile(out);
@@ -59,6 +59,6 @@ const maskableSvg = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${
   }
   // Apple touch icon (180x180)
   const apple = path.join(ICONS_DIR, 'apple-touch-icon.png');
-  await sharp(Buffer.from(baseSvg(180, 26))).png().toFile(apple);
+  await sharp(Buffer.from(logoSvg(180))).png().toFile(apple);
   console.log('  wrote', apple);
 })().catch((err) => { console.error(err); process.exit(1); });

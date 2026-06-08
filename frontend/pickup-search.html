@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 <div class="topbar">
@@ -15,6 +15,14 @@
 
 <div class="content-shell action-space">
   <div class="pickup-stepper" id="pickupStepper"></div>
+  <div class="card flow-card pickup-po-card">
+    <label class="form-label" for="poSearch" data-i18n="pickupPoSearchLabel">输入 PO</label>
+    <div class="pickup-po-search-row">
+      <input class="form-input" id="poSearch" type="search" autocomplete="off" data-i18n-placeholder="pickupPoSearchPlaceholder" placeholder="如: PO 546 / 10698">
+      <button class="btn btn-primary" id="poSearchBtn" type="button" onclick="searchPickupPo(event)" data-i18n="searchPoBtn">查找</button>
+    </div>
+    <div class="row-sub pickup-po-meta" id="poSearchMeta"></div>
+  </div>
   <div class="card flow-card">
     <label class="form-label" data-i18n="selectCustomer">选择客户</label>
     <div id="customerPicker"></div>
@@ -39,13 +47,14 @@
   </button>
 </div>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 const allowed = requireRolePage('boss');
 const params = new URLSearchParams(location.search);
 const initialCustomerId = params.get('customer_id');
 const initialOrderId = params.get('order_id');
+const initialPo = params.get('po') || '';
 let customers = [];
 let grouped = [];
 let selected = new Set();
@@ -53,6 +62,8 @@ let signatureEmpty = true;
 let customerPicker = null;
 let pendingInitialOrder = null;
 let orderFilterId = initialOrderId || '';
+let activePoFilter = '';
+let activePoCustomerId = '';
 let lastHadPieces = false;
 let lastCustomerId = '';
 
@@ -67,9 +78,75 @@ async function loadCustomers() {
   document.querySelectorAll('.back-btn, .action-bar .back').forEach((el) => { el.href = backHref; });
   customers = customerData.customers;
   customerPicker.setCustomers(customers);
-  if (targetCustomerId && customers.some(c => String(c.id) === String(targetCustomerId))) customerPicker.select(targetCustomerId);
+  if (initialPo && !pendingInitialOrder) {
+    document.getElementById('poSearch').value = initialPo;
+    await applyPickupPo(initialPo, { replaceUrl: false, silent: true });
+  } else if (targetCustomerId && customers.some(c => String(c.id) === String(targetCustomerId))) customerPicker.select(targetCustomerId);
   else if (customers.length) customerPicker.select(customers[0].id);
   else document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
+}
+
+function updatePoSearchMeta(message = '') {
+  const meta = document.getElementById('poSearchMeta');
+  if (!meta) return;
+  meta.textContent = message;
+  meta.classList.toggle('active', Boolean(message));
+}
+
+async function applyPickupPo(raw, { replaceUrl = true, silent = false } = {}) {
+  const po = String(raw || '').trim();
+  if (!po) {
+    clearPickupPo();
+    return;
+  }
+  updatePoSearchMeta(t('loading'));
+  const data = await api('/api/orders?po=' + encodeURIComponent(po) + '&include_archived=1&limit=5');
+  const orders = data.orders || [];
+  const order = orders.find((row) => !row.archived_at) || orders[0];
+  if (!order) {
+    activePoFilter = po;
+    activePoCustomerId = '';
+    grouped = [];
+    updatePoSearchMeta(tn('pickupPoNotFound', { po }));
+    renderAvailable();
+    if (!silent) toast(tn('pickupPoNotFound', { po }), { type: 'danger' });
+    return;
+  }
+  activePoFilter = order.order_number || po;
+  activePoCustomerId = String(order.customer_id || '');
+  orderFilterId = String(order.id);
+  document.getElementById('poSearch').value = activePoFilter;
+  updatePoSearchMeta(tn('pickupPoMatched', {
+    po: orderCodeText(order),
+    company: order.company || '',
+  }));
+  if (replaceUrl) {
+    history.replaceState(null, '', 'pickup-search.html?po=' + encodeURIComponent(activePoFilter));
+  }
+  const customerId = order.customer_id;
+  if (customerId && customers.some(c => String(c.id) === String(customerId))) {
+    customerPicker.select(customerId);
+  } else {
+    await loadAvailable();
+  }
+}
+
+async function searchPickupPo(ev) {
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    await applyPickupPo(document.getElementById('poSearch').value);
+  });
+}
+
+function clearPickupPo() {
+  activePoFilter = '';
+  activePoCustomerId = '';
+  orderFilterId = '';
+  document.getElementById('poSearch').value = '';
+  updatePoSearchMeta('');
+  const id = customerPicker ? customerPicker.getValue() : '';
+  if (id) history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(id));
+  loadAvailable().catch(e => toast(e.message, { type:'danger' }));
 }
 
 async function loadAvailable() {
@@ -83,7 +160,9 @@ async function loadAvailable() {
     document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
     return;
   }
-  const data = await api('/api/pickups/available?customer_id=' + encodeURIComponent(id));
+  const query = new URLSearchParams({ customer_id: id });
+  if (activePoFilter) query.set('po', activePoFilter);
+  const data = await api('/api/pickups/available?' + query.toString());
   grouped = data.orders || [];
   renderAvailable();
 }
@@ -91,7 +170,7 @@ async function loadAvailable() {
 function renderAvailable() {
   const el = document.getElementById('available');
   if (!grouped.length) {
-    el.innerHTML = emptyState(t('pickupEmpty'));
+    el.innerHTML = emptyState(activePoFilter ? tn('pickupPoNoAvailable', { po: activePoFilter }) : t('pickupEmpty'));
     return;
   }
   const initialOrderIdNum = Number(orderFilterId || 0);
@@ -99,32 +178,77 @@ function renderAvailable() {
   if (initialOrderIdNum && !filteredGroups.length) {
     el.innerHTML = errorState(t('pickupOrderUnavailable'), t('viewCustomerAllPickupPieces'), () => {
       orderFilterId = '';
+      activePoFilter = '';
+      document.getElementById('poSearch').value = '';
+      updatePoSearchMeta('');
       history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(customerPicker.getValue()));
       renderAvailable();
     });
     return;
   }
-  el.innerHTML = filteredGroups.map(order => `
+  const visiblePieceIds = visiblePickupPieceIds(filteredGroups);
+  el.innerHTML = `
+    <div class="pickup-bulk-actions">
+      <button class="btn btn-ghost" id="pickupSelectAllBtn" type="button" ${visiblePieceIds.length === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="selectAllPickupVisible()">${esc(t('selectAll'))}</button>
+      <button class="btn btn-ghost" id="pickupClearAllBtn" type="button" ${selected.size === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="clearPickupSelection()">${esc(t('clearSelection'))}</button>
+    </div>
+    ${filteredGroups.map(order => `
     <div class="card pickup-order-panel flow-card">
       <div class="pickup-order-head">
-        <div class="row-title">#${esc(order.order_number)}</div>
-        <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: order.pieces.length }))}</div>
+        <div style="flex:1; min-width:0;">
+          <div class="row-title">${esc(orderCodeText(order))}</div>
+          <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: order.pieces.length }))}</div>
+        </div>
+        <div class="pickup-order-actions">
+          <button class="btn btn-ghost btn-inline-compact" type="button" onclick="selectPickupOrder(${order.order_id})">${esc(t('selectAll'))}</button>
+          <button class="btn btn-ghost btn-inline-compact" type="button" onclick="clearPickupOrder(${order.order_id})">${esc(t('clearSelection'))}</button>
+        </div>
       </div>
       ${order.pieces.map(p => `
         <label class="row" style="cursor:pointer;">
-          <input type="checkbox" data-piece="${p.id}" onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
+          <input type="checkbox" data-piece="${p.id}" data-order="${order.order_id}" ${selected.has(Number(p.id)) ? 'checked' : ''} onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
           <div style="flex:1;">
             <div class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}</div>
             <div class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}</div>
           </div>
         </label>`).join('')}
-    </div>`).join('');
+    </div>`).join('')}`;
   updatePickupFlow();
+}
+
+function visiblePickupGroups() {
+  const initialOrderIdNum = Number(orderFilterId || 0);
+  return initialOrderIdNum ? grouped.filter(order => Number(order.order_id) === initialOrderIdNum) : grouped;
+}
+
+function visiblePickupPieceIds(groups = visiblePickupGroups()) {
+  return groups.flatMap((order) => (order.pieces || []).map((piece) => Number(piece.id)));
+}
+
+function syncPickupChecks() {
+  document.querySelectorAll('[data-piece]').forEach((input) => {
+    input.checked = selected.has(Number(input.dataset.piece));
+  });
+}
+
+function updatePickupBulkButtons() {
+  const visibleIds = visiblePickupPieceIds();
+  const selectAllBtn = document.getElementById('pickupSelectAllBtn');
+  const clearAllBtn = document.getElementById('pickupClearAllBtn');
+  if (selectAllBtn) {
+    selectAllBtn.disabled = visibleIds.length === 0 || visibleIds.every((id) => selected.has(Number(id)));
+    selectAllBtn.style.opacity = selectAllBtn.disabled ? '.5' : '';
+  }
+  if (clearAllBtn) {
+    clearAllBtn.disabled = selected.size === 0;
+    clearAllBtn.style.opacity = clearAllBtn.disabled ? '.5' : '';
+  }
 }
 
 function togglePiece(id, on) {
   if (on) selected.add(Number(id));
   else selected.delete(Number(id));
+  syncPickupChecks();
   updatePickupFlow();
   if (selected.size > 0 && !lastHadPieces) {
     lastHadPieces = true;
@@ -137,12 +261,47 @@ function togglePiece(id, on) {
   }
 }
 
+function selectPickupIds(ids) {
+  ids.forEach((id) => selected.add(Number(id)));
+  lastHadPieces = selected.size > 0;
+  syncPickupChecks();
+  updatePickupFlow();
+}
+
+function clearPickupIds(ids) {
+  ids.forEach((id) => selected.delete(Number(id)));
+  lastHadPieces = selected.size > 0;
+  syncPickupChecks();
+  updatePickupFlow();
+}
+
+function selectAllPickupVisible() {
+  selectPickupIds(visiblePickupPieceIds());
+}
+
+function clearPickupSelection() {
+  selected.clear();
+  lastHadPieces = false;
+  syncPickupChecks();
+  updatePickupFlow();
+}
+
+function selectPickupOrder(orderId) {
+  const order = grouped.find((row) => Number(row.order_id) === Number(orderId));
+  selectPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
+}
+
+function clearPickupOrder(orderId) {
+  const order = grouped.find((row) => Number(row.order_id) === Number(orderId));
+  clearPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
+}
+
 function updatePickupFlow() {
   const hasCustomer = Boolean(customerPicker && customerPicker.getValue());
   const hasPieces = selected.size > 0;
   const hasSignerName = Boolean(document.getElementById('name').value.trim());
   const steps = [
-    { number: 1, label: t('pickupStepCustomer'), done: hasCustomer },
+    { number: 1, label: t('pickupStepLookup'), done: hasCustomer },
     { number: 2, label: t('pickupStepPieces'), done: hasPieces },
     { number: 3, label: t('pickupStepConfirm'), done: hasPieces && hasSignerName },
   ];
@@ -164,6 +323,7 @@ function updatePickupFlow() {
   if (summary) {
     summary.textContent = selected.size ? tn('pickupSelectedConfirmN', { n: selected.size }) : t('pickupConfirmBtn');
   }
+  updatePickupBulkButtons();
 }
 
 const canvas = document.getElementById('sig');
@@ -223,6 +383,14 @@ canvas.addEventListener('touchmove', move, { passive:false });
 canvas.addEventListener('touchend', end);
 canvas.addEventListener('touchcancel', end);
 document.getElementById('name').addEventListener('input', updatePickupFlow);
+document.getElementById('poSearch').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    searchPickupPo({ currentTarget: document.getElementById('poSearchBtn') }).catch(err => toast(err.message, { type:'danger' }));
+  } else if (event.key === 'Escape') {
+    clearPickupPo();
+  }
+});
 
 async function submitBatch(ev) {
   const name = document.getElementById('name').value.trim();
@@ -263,8 +431,19 @@ if (allowed) {
       }
       if (pendingInitialOrder && String(customer.id) !== String(pendingInitialOrder.customer_id)) {
         orderFilterId = '';
+        activePoFilter = '';
+        activePoCustomerId = '';
+        document.getElementById('poSearch').value = '';
+        updatePoSearchMeta('');
         history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(customer.id));
         document.querySelectorAll('.back-btn, .action-bar .back').forEach((el) => { el.href = 'pickup-batches.html'; });
+      } else if (activePoFilter && activePoCustomerId && String(customer.id) !== String(activePoCustomerId)) {
+        orderFilterId = '';
+        activePoFilter = '';
+        activePoCustomerId = '';
+        document.getElementById('poSearch').value = '';
+        updatePoSearchMeta('');
+        history.replaceState(null, '', 'pickup-search.html?customer_id=' + encodeURIComponent(customer.id));
       }
       loadAvailable().catch(e => toast(e.message, { type:'danger' }));
     },

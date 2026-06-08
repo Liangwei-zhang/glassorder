@@ -42,7 +42,7 @@ async function createReadyOrder(session, customerId, stamp, suffix) {
   form.set('customer_id', String(customerId));
   form.set('priority', 'normal');
   form.set('deadline', '2026-05-30');
-  form.set('pdf', new File([pdf], `browser-pickup-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([pdf], `Glass Order - 260607 Browser Pickup PO PBB-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers: auth(session), body: form });
   const detail = await api(`/api/orders/${created.order.id}`, { headers: auth(session) });
   await api('/api/pieces/batch', {
@@ -51,7 +51,7 @@ async function createReadyOrder(session, customerId, stamp, suffix) {
     body: JSON.stringify({ action: 'complete', piece_ids: detail.order.pieces.map(p => p.id) }),
   });
   await api(`/api/orders/${created.order.id}/ready`, { method: 'POST', headers: auth(session) });
-  return created.order.id;
+  return { id: created.order.id, orderNumber: created.order.order_number };
 }
 
 async function seedCustomerWithOrders(session) {
@@ -61,9 +61,9 @@ async function seedCustomerWithOrders(session) {
     headers: { ...auth(session), 'Content-Type': 'application/json' },
     body: JSON.stringify({ company: `Browser Pickup ${stamp}`, contact_name: 'QA', email: `browser-pickup-${stamp}@example.test` }),
   });
-  await createReadyOrder(session, c.customer.id, stamp, 'A');
-  await createReadyOrder(session, c.customer.id, stamp, 'B');
-  return c.customer;
+  const orderA = await createReadyOrder(session, c.customer.id, stamp, 'A');
+  const orderB = await createReadyOrder(session, c.customer.id, stamp, 'B');
+  return { ...c.customer, orders: [orderA, orderB] };
 }
 
 async function draw(page) {
@@ -99,6 +99,28 @@ async function draw(page) {
       localStorage.setItem('glassorder_lang', 'zh');
     }, { token: boss.token, user: boss.user });
     await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
+    await page.fill('#poSearch', customer.orders[0].orderNumber.replace(/^PO\s+/i, ''));
+    await page.click('#poSearchBtn');
+    await page.waitForFunction((orderNumber) => {
+      const meta = document.querySelector('#poSearchMeta')?.textContent || '';
+      const panels = [...document.querySelectorAll('.pickup-order-panel')];
+      return meta.includes(orderNumber) && panels.length === 1 && document.querySelectorAll('[data-piece]').length === 8;
+    }, customer.orders[0].orderNumber, { timeout: 10000 });
+    const poLookupState = await page.evaluate(() => ({
+      selectedCustomer: customerPicker.getValue(),
+      orderPanels: document.querySelectorAll('.pickup-order-panel').length,
+      pieces: document.querySelectorAll('[data-piece]').length,
+      meta: document.querySelector('#poSearchMeta')?.textContent || '',
+    }));
+    if (String(poLookupState.selectedCustomer) !== String(customer.id)
+      || poLookupState.orderPanels !== 1
+      || poLookupState.pieces !== 8) {
+      throw new Error(`pickup PO lookup failed: ${JSON.stringify(poLookupState)}`);
+    }
+    await page.focus('#poSearch');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#poSearch')?.value, null, { timeout: 10000 });
+
     await page.fill('#customerPicker input[type="search"]', customer.company);
     await page.locator(`.customer-picker-option[data-id="${customer.id}"]`).click();
     await page.waitForSelector('[data-piece]');

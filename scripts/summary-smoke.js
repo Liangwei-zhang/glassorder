@@ -21,9 +21,21 @@ async function login(loginName, password) {
   return res.data;
 }
 
+async function loginAny(candidates) {
+  let lastError = null;
+  for (const [loginName, password] of candidates) {
+    try {
+      return await login(loginName, password);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('login failed');
+}
+
 (async () => {
-  const boss = await login('bossdemo', 'boss123456');
-  const worker = await login('workerdemo', 'worker123456');
+  const boss = await loginAny([['admin', 'admin123'], ['bossdemo', 'boss123456']]);
+  const worker = await loginAny([['worker', 'worker123'], ['workerdemo', 'worker123456']]);
   const bossSummary = await api('/api/summary/overview', { headers: { Authorization: `Bearer ${boss.token}` } });
   if (bossSummary.status !== 200 || !bossSummary.data.totals || !Array.isArray(bossSummary.data.by_customer)) {
     throw new Error(`boss summary failed ${bossSummary.status}`);

@@ -79,7 +79,7 @@ async function createOrder(boss, customerId, stamp) {
   form.set('customer_id', String(customerId));
   form.set('priority', 'normal');
   form.set('deadline', '2026-05-30');
-  form.set('pdf', new File([uniquePdf(`${stamp}-valid`)], `security-${stamp}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([uniquePdf(`${stamp}-valid`)], `Glass Order - 260612 Security QA PO SEC-${stamp}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers: auth(boss), body: form });
   const detail = await api(`/api/orders/${created.order.id}`, { headers: auth(boss) });
   return detail.order;
@@ -89,7 +89,7 @@ async function expectBadPriority(boss, customerId, stamp) {
   const form = new FormData();
   form.set('customer_id', String(customerId));
   form.set('priority', 'bad');
-  form.set('pdf', new File([uniquePdf(`${stamp}-bad-priority`)], `security-bad-${stamp}.pdf`, { type: 'application/pdf' }));
+  form.set('pdf', new File([uniquePdf(`${stamp}-bad-priority`)], `Glass Order - 260613 Security Bad PO SECBAD-${stamp}.pdf`, { type: 'application/pdf' }));
   await expectStatus('invalid priority', '/api/orders', 400, {
     method: 'POST',
     headers: auth(boss),

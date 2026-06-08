@@ -26,6 +26,7 @@ function stageLabel(stage) {
     cut: t('stageCut'),
     edge: t('stageEdge'),
     tempered: t('stageTempered'),
+    polish: t('stagePolish'),
     finished: t('stageFinished'),
   };
   return map[stage] || stage;

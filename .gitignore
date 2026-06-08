@@ -13,8 +13,11 @@ backups/
 # Runtime data
 backend/glass.db
 backend/glass.db-*
+backend/glass-codex-qa.db
+backend/glass-codex-qa.db-*
 backend/*.db-shm
 backend/*.db-wal
 backend/uploads/**
+backend/uploads-codex-qa/**
 !backend/uploads/
 !backend/uploads/.gitkeep

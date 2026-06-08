@@ -1,5 +1,6 @@
-const ALL_STEPS = ['cut', 'edge', 'tempered'];
-const DISPLAY_STAGES = ['cut', 'edge', 'tempered', 'finished'];
+const LEGACY_STEPS = ['cut', 'edge', 'tempered'];
+const ALL_STEPS = ['cut', 'edge', 'tempered', 'polish'];
+const DISPLAY_STAGES = ['cut', 'edge', 'tempered', 'polish', 'finished'];
 
 function parseJSON(value, fallback) {
   if (!value) return fallback;
@@ -11,13 +12,16 @@ function parseJSON(value, fallback) {
   }
 }
 
-function normalizeRequiredSteps(value) {
+function normalizeRequiredSteps(value, options = {}) {
+  const fallbackSteps = Array.isArray(options.fallbackSteps) && options.fallbackSteps.length
+    ? options.fallbackSteps
+    : ALL_STEPS;
   const parsed = parseJSON(value, value);
   const raw = Array.isArray(parsed)
     ? parsed
     : parsed && Array.isArray(parsed.required_steps)
       ? parsed.required_steps
-      : ALL_STEPS;
+      : fallbackSteps;
   const seen = new Set();
   const out = [];
   for (const step of raw) {
@@ -26,7 +30,7 @@ function normalizeRequiredSteps(value) {
       out.push(step);
     }
   }
-  return out.length ? out : [...ALL_STEPS];
+  return out.length ? out : [...fallbackSteps];
 }
 
 function normalizeCompletedSteps(value) {
@@ -52,7 +56,9 @@ function inferCompletedFromStage(stage, requiredSteps) {
 
 function hydratePieceWorkflow(piece) {
   if (!piece) return piece;
-  const requiredSteps = normalizeRequiredSteps(piece.process_config);
+  const requiredSteps = normalizeRequiredSteps(piece.process_config, {
+    fallbackSteps: piece.process_config ? ALL_STEPS : LEGACY_STEPS,
+  });
   let completedSteps = normalizeCompletedSteps(piece.completed_steps);
   if (!completedSteps.length && piece.stage && piece.stage !== 'cut') {
     completedSteps = inferCompletedFromStage(piece.stage, requiredSteps);
@@ -108,6 +114,7 @@ function workflowSummary(piece) {
 module.exports = {
   ALL_STEPS,
   DISPLAY_STAGES,
+  LEGACY_STEPS,
   advancePieceState,
   completedStepsJSON,
   hydratePieceWorkflow,

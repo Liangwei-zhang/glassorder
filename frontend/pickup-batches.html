@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup Batches</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 <div class="topbar">
@@ -28,8 +28,8 @@
 
 <a class="fab" href="pickup-search.html" aria-label="new pickup" data-i18n-title="newPickupBatch">+</a>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 if (pageAllowed) injectBossNav('pickup');
@@ -162,7 +162,7 @@ function renderReadyOrders(rows) {
   el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${rows.map(o => `
     <a class="row" href="pickup-search.html?customer_id=${o.customer_id}">
       <div style="flex:1;">
-        <div class="row-title">#${esc(o.order_number)} · ${esc(o.company)}</div>
+        <div class="row-title">${esc(orderCodeText(o))} · ${esc(o.company)}</div>
         <div class="row-sub">${esc(o.project_name || '')} · ${esc(tn('piecesShortN', { n: Number(o.unpicked_pieces || 0) }))} · ${esc(t('plan'))} ${esc(o.deadline || t('notSet'))}</div>
       </div>
       <span class="badge badge-pickup">${esc(t('statusReadyPickup'))}</span>
@@ -178,7 +178,7 @@ function renderUnpickedPieces(rows) {
   el.innerHTML = `<div class="card" style="padding:0; overflow:hidden;">${rows.map(p => `
     <a class="row" href="pickup-search.html?customer_id=${p.customer_id}">
       <div style="flex:1;">
-        <div class="row-title">${esc(p.company)} · #${esc(p.order_number)} · ${esc(tn('pieceN', { n: p.piece_no }))}</div>
+        <div class="row-title">${esc(p.company)} · ${esc(orderCodeText(p))} · ${esc(tn('pieceN', { n: p.piece_no }))}</div>
         <div class="row-sub">${esc(p.project_name || '')} · ${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}</div>
       </div>
       <span class="badge badge-pickup">${esc(t('unpickedPieces'))}</span>

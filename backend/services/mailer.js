@@ -4,10 +4,24 @@ function smtpConfigured() {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 }
 
-function sendPickupEmail({ order, slipPath, to }) {
+function poLabel(value) {
+  const code = String(value || '').trim();
+  if (!code) return 'PO';
+  return /^PO\b/i.test(code) ? code : `PO ${code}`;
+}
+
+function safeAttachmentName(value) {
+  return String(value || 'po')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'po';
+}
+
+function sendPickupEmail({ order, slipPath, to, cc }) {
   if (!smtpConfigured() || !to) {
-    return { skipped: true, reason: !to ? 'no customer email' : 'smtp not configured' };
+    return { skipped: true, reason: !to ? 'no customer email' : 'smtp not configured', cc: cc || null };
   }
+  const po = poLabel(order.order_number);
 
   const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
@@ -22,14 +36,15 @@ function sendPickupEmail({ order, slipPath, to }) {
   transporter.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to,
-    subject: `Pickup slip for order ${order.order_number}`,
-    text: `Attached is the pickup slip for order ${order.order_number}.`,
-    attachments: [{ filename: `pickup-${order.order_number}.pdf`, path: slipPath }],
+    cc: cc || undefined,
+    subject: `Pickup slip for ${po}`,
+    text: `Attached is the pickup slip for ${po}.`,
+    attachments: [{ filename: `pickup-${safeAttachmentName(order.order_number)}.pdf`, path: slipPath }],
   }).catch((err) => {
     console.error('Pickup email failed:', err.message);
   });
 
-  return { skipped: false };
+  return { skipped: false, cc: cc || null };
 }
 
 module.exports = { sendPickupEmail };

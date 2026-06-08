@@ -6,7 +6,7 @@
  * - Uploaded artifacts (/uploads/*): network-only, never cached, because access is role-gated.
  * - API calls (/api/*): network-only, never cached.
  */
-const VERSION = 'v44-2026-05-22-optional-signature';
+const VERSION = 'v46-2026-06-08-po-order-number';
 const STATIC_CACHE = `glassorder-static-${VERSION}`;
 const ASSET_CACHE = `glassorder-assets-${VERSION}`;
 const PRECACHE_HTML = [
@@ -35,6 +35,7 @@ const PRECACHE_ASSET = [
   './icons/loading.gif',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
 ];
 

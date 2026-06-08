@@ -1,6 +1,12 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 
+function poLabel(value) {
+  const code = String(value || '').trim();
+  if (!code) return 'PO -';
+  return /^PO\b/i.test(code) ? code : `PO ${code}`;
+}
+
 function createPickupSlip({ order, pieces, signerName, signerPhone, signaturePath, outputPath }) {
   const doc = new PDFDocument({ size: 'LETTER', margin: 48 });
   const stream = fs.createWriteStream(outputPath);
@@ -9,7 +15,7 @@ function createPickupSlip({ order, pieces, signerName, signerPhone, signaturePat
   doc.fontSize(20).text('Pickup Slip', { align: 'center' });
   doc.moveDown();
   doc.fontSize(12);
-  doc.text(`Order: ${order.order_number}`);
+  doc.text(`${poLabel(order.order_number)}`);
   doc.text(`Customer: ${order.company}`);
   doc.text(`Project: ${order.project_name || ''}`);
   doc.text(`Pieces: ${pieces.length}`);

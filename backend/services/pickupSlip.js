@@ -1,6 +1,12 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 
+function poLabel(value) {
+  const code = String(value || '').trim();
+  if (!code) return 'PO -';
+  return /^PO\b/i.test(code) ? code : `PO ${code}`;
+}
+
 function groupItemsByOrder(items) {
   const groups = new Map();
   for (const item of items) {
@@ -37,7 +43,7 @@ function createPickupBatchSlip({ batch, customer, items, signerName, signerPhone
   doc.fontSize(14).text('Pieces by Order');
   doc.moveDown(0.4);
   for (const group of groupItemsByOrder(items)) {
-    doc.fontSize(12).text(`Order #${group.order_number} ${group.project_name ? '- ' + group.project_name : ''}`);
+    doc.fontSize(12).text(`${poLabel(group.order_number)} ${group.project_name ? '- ' + group.project_name : ''}`);
     doc.fontSize(9);
     for (const piece of group.pieces) {
       doc.text(`#${piece.piece_no}  ${piece.thickness || ''} ${piece.type || ''}  ${piece.size || ''}  ${piece.weight || ''}`);

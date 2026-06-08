@@ -287,7 +287,6 @@ body.motion-ready .motion-item.motion-done { will-change: auto; }
 body.motion-ready .row,
 body.motion-ready .stat-tile,
 body.motion-ready .pickup-stat-card,
-body.motion-ready .worker-company,
 body.motion-ready .dashboard-task-card,
 body.motion-ready .customer-rank-card,
 body.motion-ready .customer-rank-pill {
@@ -772,6 +771,19 @@ body.motion-premium .btn-warn::before {
 .action-bar .btn-success,
 .action-bar .btn-warn,
 .action-bar .btn-danger { flex: 2; }
+.action-bar.select-actions {
+  align-items: stretch;
+}
+.action-bar.select-actions .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.action-bar.select-actions .btn-success {
+  flex: 1.6 1 auto;
+}
 
 .action-bar #selectedSummary {
   display: block;
@@ -809,6 +821,29 @@ body.motion-premium .btn-warn::before {
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .form-textarea { resize: vertical; min-height: 60px; }
+
+.form-hint {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-1);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.form-hint[data-state="ok"] {
+  background: var(--success-soft);
+  color: var(--success-text);
+  border-color: rgba(21, 128, 61, .18);
+}
+.form-hint[data-state="error"] {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  border-color: rgba(185, 28, 28, .18);
+}
 
 .login-error {
   display: none;
@@ -1059,6 +1094,47 @@ body.select-mode .piece.selected .piece-check {
 }
 body.select-mode .piece.selected .piece-check::after { opacity: 1; }
 body.select-mode .piece { cursor: copy; }
+
+.drawing-nav-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.18);
+  color: white;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.32);
+  flex-shrink: 0;
+}
+.drawing-nav-btn:disabled {
+  opacity: .32;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.drawing-nav-btn:not(:disabled):active {
+  transform: scale(.96);
+}
+#fullDrawing,
+#viewer .drawing-transition-img {
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+#fullDrawing.drawing-animating,
+#viewer .drawing-transition-img {
+  transition: transform 260ms cubic-bezier(.22,.9,.2,1), opacity 220ms var(--ease-out);
+}
+#viewer .drawing-preview-img {
+  opacity: 0;
+}
+#fullDrawing.drawing-dragging {
+  transition: none !important;
+}
 
 /* Long-press progress ring (visual hint while holding to enter select mode) */
 .piece.long-pressing::before {
@@ -1901,6 +1977,24 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   margin-bottom: 12px;
   overflow: hidden;
 }
+.pickup-po-card {
+  margin-bottom: 12px;
+}
+.pickup-po-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.pickup-po-search-row .btn {
+  min-height: 44px;
+  padding-inline: 14px;
+}
+.pickup-po-meta.active {
+  margin-top: 8px;
+  color: var(--accent-strong);
+  font-weight: 750;
+}
 .pickup-stepper {
   position: sticky;
   top: 60px;
@@ -1926,6 +2020,25 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   font-size: 12px;
   font-weight: 750;
   text-align: center;
+}
+.pickup-bulk-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.pickup-bulk-actions .btn {
+  flex: 1;
+}
+.pickup-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.pickup-order-actions .btn {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 .pickup-step {
   min-width: 0;

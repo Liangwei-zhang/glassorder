@@ -11,6 +11,7 @@ case "$ENV_FILE" in
   /*) ;;
   *) ENV_FILE="$ROOT_DIR/$ENV_FILE" ;;
 esac
+ENV_FILE="$(readlink -f "$ENV_FILE" 2>/dev/null || printf '%s' "$ENV_FILE")"
 ENV_BASENAME="$(basename "$ENV_FILE")"
 PROFILE_SUFFIX=""
 if [ "$ENV_BASENAME" != ".env" ]; then
@@ -37,6 +38,15 @@ running_pid() {
       return 0
     fi
   fi
+  local port p
+  port="$(port_from_env)"; port="${port:-8781}"
+  for p in $(profile_pids | sort -u); do
+    if pid_listens_on_port "$p" "$port"; then
+      echo "$p" > "$PID_FILE"
+      echo "$p"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -50,11 +60,24 @@ pid_cwd() {
   readlink -f "/proc/$pid/cwd" 2>/dev/null || true
 }
 
+normalize_env_path() {
+  local value="$1"
+  local base="$2"
+  [ -n "$value" ] || return 0
+  case "$value" in
+    /*) readlink -f "$value" 2>/dev/null || printf '%s\n' "$value" ;;
+    *) readlink -f "$base/$value" 2>/dev/null || printf '%s\n' "$base/$value" ;;
+  esac
+}
+
 pid_matches_profile() {
   local pid="$1"
+  local cwd env_file
   [ -n "$pid" ] || return 1
-  [ "$(pid_cwd "$pid")" = "$BACKEND_DIR" ] || return 1
-  [ "$(pid_env_file "$pid")" = "$ENV_FILE" ] || return 1
+  cwd="$(pid_cwd "$pid")"
+  [ "$cwd" = "$BACKEND_DIR" ] || return 1
+  env_file="$(normalize_env_path "$(pid_env_file "$pid")" "$cwd")"
+  [ "$env_file" = "$ENV_FILE" ] || return 1
 }
 
 profile_pids() {

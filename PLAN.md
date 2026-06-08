@@ -122,6 +122,196 @@ cd backend && npm install && npm start
 ## 验证脚本
 `backend/scripts/smoke.sh` — 跑一遍 T3/T4/T6/T8/T9 的 curl 链路
 
+## Phase 14：车间流程与交付功能更新（2026-06-07）
+
+### 安全与数据隔离
+- 正式运行数据已备份到 `backups/20260607-152007`，包含 `glass.db` 和 `uploads/`。
+- 本轮开发验证只使用 `ENV_FILE=backend/.env.codex-qa`，对应 `backend/glass-codex-qa.db` 和 `backend/uploads-codex-qa`。
+- 回退锚点：本地 `ae6509c Backup glassorder project state`；GitHub 私有备份 `le5875457-max/glassorder@01dfb0d`。
+
+### P14-T1. 打磨工序
+- 需求：钢化完成后增加“打磨”工序，默认完整流程改为 `cut -> edge -> tempered -> polish -> finished`。
+- 范围：
+  - 后端工序常量、推进逻辑、批量完成、片工序配置。
+  - SQLite `pieces.stage` CHECK 约束迁移，允许 `polish`。
+  - 工人队列、片子网格、老板详情/仪表盘编辑工序、i18n 文案。
+- 兼容策略：老订单已有 `process_config` 保持原流程；新订单默认包含打磨。恢复“完整工序”时使用新完整流程。
+- 验收：
+  - 新建订单的每片 `required_steps` 包含 `polish`。
+  - 单片连续推进 4 次后才 `finished`，第三次后状态为 `polish`。
+  - 工人端能按“打磨”筛选，队列显示待打磨片。
+- 验证命令：
+  - `ENV_FILE=backend/.env.codex-qa ./scripts/smoke.sh`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js`
+
+### P14-T2. 车间图纸上一片/下一片
+- 需求：车间查看图纸时增加上一片/下一片，可左右滑动切换。
+- 范围：`frontend/worker-pieces.html` 全屏图纸 viewer、i18n 文案、浏览器 QA。
+- 交互策略：保留现有拖动/缩放；全屏图纸增加左右按钮，未明显缩放时横向滑动切换当前视图内上一片/下一片。
+- 验收：
+  - 打开第 N 片全屏图纸，点击“下一片”显示第 N+1 片标题和图纸。
+  - 点击“上一片”返回第 N 片。
+  - 首片/末片按钮 disabled，横滑不会越界。
+- 验证命令：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js`
+
+### P14-T3. 邮件 CC
+- 需求：客户 email addresses 增加抄送 CC。
+- 范围：`customers.email_cc` migration、客户 CRUD、搜索、客户页面表单和列表、邮件发送服务、发送事件详情。
+- 规则：CC 支持多个邮箱，英文逗号、中文逗号或分号分隔；保存为规范化逗号列表。
+- 验收：
+  - 新增/编辑客户可保存 `email_cc`。
+  - 无效 CC 邮箱返回 400。
+  - 重发/取货 slip 调 `sendPickupEmail` 时带 `cc`，SMTP 未配置仍返回 skipped。
+- 验证命令：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-cc-qa.js`
+
+### P14-T4. 全选
+- 需求：切片、开切口、钢化选片增加全选；取货时也增加全选。
+- 范围：`frontend/worker-pieces.html`、`frontend/pickup-search.html`、i18n 文案、浏览器 QA。
+- 规则：
+  - 车间选择模式：全选当前视图片子，清空选择；当前视图包括 cut/edge/tempered/polish/all。
+  - 取货：按订单分组提供全选/清空，全页提供全选可取片/清空。
+- 验收：
+  - 车间任一工序点全选后，选中数量等于当前视图片数。
+  - 取货页全选后，确认按钮显示全部可取片数量；按订单全选只选择该订单片子。
+- 验证命令：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js`
+
+### P14-T5. 公司 Logo 图标
+- 需求：PWA 图标改为公司 logo。
+- 范围：`scripts/generate-icons.js`、`frontend/icons/*`、`frontend/manifest.json`、`frontend/sw.js`。
+- 现状：项目内未找到现成 logo 文件；本轮先用公司名首字母/玻璃品牌样式生成可交付图标，后续拿到正式 logo 可替换源图再重新生成。
+- 验收：
+  - `icon-192.png`、`icon-512.png`、`icon-maskable-512.png`、`apple-touch-icon.png` 更新。
+  - `manifest.json` 引用正常，service worker cache 版本更新。
+- 验证命令：
+  - `ENV_FILE=backend/.env.codex-qa node scripts/generate-icons.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js`
+
+### P14 完整回归
+- `ENV_FILE=backend/.env.codex-qa ./scripts/smoke.sh`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js`
+- `git diff --check -- glassorder`
+
+### P14 验收结果（2026-06-07）
+- P14-T1 打磨工序：`piece-workflow-qa.js` 与 `smoke.sh` 通过；新订单默认 `cut -> edge -> tempered -> polish -> finished`，第三次推进后为 `polish`，第四次完成。
+- P14-T2 图纸上一片/下一片：`worker-drawing-qa.js` 通过；按钮和真实触摸横滑都能切换片图纸。
+- P14-T3 邮件 CC：`customer-cc-qa.js` 通过；新增/编辑/搜索/无效邮箱校验/取货邮件及重发事件均包含 `email_cc`。
+- P14-T4 全选：`select-all-qa.js` 通过；车间当前视图全选/清空、取货全页和按订单全选/清空均通过。
+- P14-T5 图标：`generate-icons.js` 已更新并生成 192/512/maskable/apple 图标；`pwa-install-qa.js` 通过，SW cache 版本为 `v45-2026-06-07-phase14-icons`。
+- 完整回归通过：
+  - `ENV_FILE=backend/.env.codex-qa ./scripts/smoke.sh`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/perf-check-worker.js`
+  - `git diff --check -- glassorder`
+- QA 服务：`ENV_FILE=backend/.env.codex-qa ./scripts/status.sh` 显示 `http://localhost:8783/api/health -> {"ok":true}`。
+- 数据隔离结果：正式库未写入测试业务数据，计数保持 `customers=10, orders=32, pieces=322, pickup_batches=7, pickups=0`；QA 数据写入 `backend/glass-codex-qa.db`。
+- 注意：一次中途 schema 检查误用了默认 DB 初始化，正式库已应用本轮非业务 schema migration（`customers.email_cc` 与 `pieces.stage` 支持 `polish`），但没有插入测试客户、订单或片数据；正式数据备份仍在 `backups/20260607-152007`。
+
+## Phase 15：全面 QA / 查缺补漏（2026-06-07）
+
+### 范围
+- 后端：API、安全权限、上传、迁移、数据完整性、业务流程和性能自测。
+- 前端：移动/桌面页面矩阵、底部导航、固定操作条、窄屏按钮、PWA、动效、图纸滑动、全选和取货批次。
+- 数据：继续只使用 `ENV_FILE=backend/.env.codex-qa`；正式库只读复核，不插入测试业务数据。
+
+### P15-T1. QA 脚本可靠性修复
+- `scripts/summary-smoke.js` 改为 `admin/worker` 优先、demo 账号兜底，避免 QA 环境未 seed demo 用户时误失败。
+- `scripts/browser-qa.js` 的部分取货校验改为使用本轮唯一客户名和 API 返回的剩余片 ID，避免旧 QA 数据干扰页面计数。
+- 验收：`summary-smoke.js`、`browser-qa.js` 在 `8783` QA 服务上稳定通过。
+
+### P15-T2. 前端 UI 优化与新增回归
+- 新增 `scripts/ui-regression-qa.js`，覆盖 320/390/1280 视口：
+  - boss 底部导航页面最后一行必须能滚到导航栏上方。
+  - 车间选择模式固定操作条按钮不能裁切、不能横向溢出。
+  - 取货页全选/按订单全选和确认操作条不能裁切、不能遮挡签名区。
+- 修复发现的问题：移除 `.worker-company` 的 `content-visibility` 高度预估，避免车间列表分组在移动端滚到底部时因延迟展开导致最后一行被固定底部导航遮挡。
+- 验收：`ui-regression-qa.js` 通过，且 `page-matrix-qa.js` / `navigation-browser-qa.js` / `motion-browser-qa.js` 仍通过。
+
+### P15-T3. 后端迁移与数据完整性自测
+- 在 `/tmp` 临时副本中复制 `backups/20260607-152007/glass.db`，加载当前 `backend/db.js` 执行 migration。
+- 验收：
+  - 迁移副本业务计数保持 `customers=10, orders=32, pieces=322, pickup_batches=7, pickups=0`。
+  - `PRAGMA integrity_check` 返回 `ok`。
+  - `PRAGMA foreign_key_check` 返回 0 条。
+  - `customers.email_cc` 存在，`pieces.stage` CHECK 允许 `polish`。
+
+### P15-T4. 最终验证命令
+- 静态检查：
+  - `find backend frontend scripts -path 'backend/node_modules' -prune -o -path 'backend/uploads' -prune -o -path 'backend/uploads-codex-qa' -prune -o -type f -name '*.js' -print0 | xargs -0 -n1 node --check`
+  - `find . -path './backend/node_modules' -prune -o -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n`
+  - HTML inline script syntax check（17 个 inline script）
+  - `git diff --check -- glassorder`
+- 后端/API：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 bash scripts/smoke.sh`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/security-regression.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 bash backend/scripts/zip-upload-smoke.sh`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/summary-smoke.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-cc-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/perf-check-worker.js`
+- 浏览器/UI：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/navigation-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/motion-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js`
+
+### P15 验收结果
+- 后端/API 回归全部通过，最终输出 `BACKEND/API REGRESSION PASS`。
+- 浏览器/UI 回归全部通过，最终输出 `BROWSER/UI REGRESSION PASS`。
+- QA 服务健康：`ENV_FILE=backend/.env.codex-qa bash scripts/status.sh` 返回 `RUNNING` 且 `/api/health -> {"ok":true}`。
+- QA 日志错误扫描无 `error/exception/trace/failed/unhandled` 结果。
+- 正式库只读复核：计数仍为 `customers=10, orders=32, pieces=322, pickup_batches=7, pickups=0`，`integrity_check=ok`，外键违规 0。
+- QA 库完整性：`integrity_check=ok`，外键违规 0；测试数据只存在于 `backend/glass-codex-qa.db`。
+
+## Phase 16：车间图纸滑动手感优化（2026-06-07）
+
+### 需求
+- 车间全屏图纸“上一片/下一片”和左右滑动切换不能生硬。
+- 手指横向滑动要跟手，未达到阈值时要回弹，不应把图片拖偏；达到阈值时旧图滑出、新图滑入。
+
+### 实现
+- `frontend/worker-pieces.html`
+  - 新增 `drawingTransition` 状态，切换期间锁定上一片/下一片按钮，避免重复触发。
+  - 按钮切换和滑动切换共用 `animateFullDrawingTransition`：克隆旧图作为滑出层，预加载新图后按方向滑入。
+  - 适配屏幕比例下的横向手势改为实时跟手；拖动时相邻图纸从侧边同步露出，边界有阻尼；短距离滑动走回弹。
+  - 当前图纸加载后预热上一片/下一片图片 URL 与图片对象，减少第一次横滑时的等待感。
+  - 放大查看时继续保留原有拖拽/缩放逻辑。
+  - 支持 `prefers-reduced-motion`：减少动画时长。
+- `frontend/shared.css`
+  - 增加全屏图纸转场层的 transform/opacity transition、will-change 和拖动中禁用 transition。
+- `scripts/worker-drawing-qa.js`
+  - 增强专项 QA：验证按钮切换出现转场层、拖动中会出现相邻图预览层、真实触摸滑动仍能切换、短距离拖动会回弹且不误翻片。
+
+### 验收标准
+- 点击“下一片/上一片”时，旧图按方向滑出，新图按方向滑入。
+- 手指横滑时当前图跟随手指移动，相邻图纸同步从侧边出现；边界滑动有阻尼。
+- 短滑不翻片，并在松手后回到居中/适配位置。
+- 放大后的拖拽/缩放功能不回归。
+- 移动/桌面页面矩阵和 UI 溢出/遮挡检查不回归。
+
+### 验证结果
+- `node` inline script syntax check for `frontend/worker-pieces.html` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js` ✅，最新输出 `WORKER DRAWING QA PASS order=129 title=第 2 片 · 10mm Clear Tempered`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅，输出 `PAGE MATRIX QA PASS checks=30`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅，最新输出 `UI REGRESSION QA PASS checks=18 customer=412 worker_order=131 pickup_order=133`
+- `git diff --check -- glassorder` ✅
+- QA 服务日志错误关键字扫描无结果 ✅
+
 ## 验收状态（2026-05-11）
 
 全部 T1–T12 已实现并通过自动/人工验证。
@@ -2569,3 +2759,147 @@ BASE=http://localhost:8781 node <verify-default-profile>
 - `bash -n scripts/stop.sh scripts/clear-test-data.sh scripts/_common.sh scripts/start.sh scripts/backup-runtime.sh` ✅
 - `./scripts/clear-test-data.sh --apply --no-backup --no-restart` 在未设置 `ALLOW_CLEAR_WITHOUT_BACKUP=1` 时拒绝执行，并自动恢复原本运行的默认 profile ✅
 - 默认 profile 服务恢复后健康检查正常，默认业务表仍全 0、`users=2`、`schema_migrations=6` ✅
+
+## Phase 39：订单 PO 唯一识别码改造计划
+
+### 需求
+上传 PDF 订单时，从 PDF 文件名自动识别 PO 码，并把 PO 作为订单的唯一业务编码。数据库中如果已经存在相同 PO，上传必须失败并提示上传者修改 PDF 文件名，不能自动生成重复或带后缀的新订单号。员工查询订单、老板查找订单、客户签字/取货查询、后期统计都要以 PO 为识别码。
+
+### 文件名规律
+样例规律为：`Glass Order - <YYMMDD> <订单描述>.pdf`，PO 来自日期后面的订单描述。
+
+- `Glass Order - 260514 Glass Built- PO 546.pdf` -> `PO 546`
+- `Glass Order - 260513 You -Canmore (1).pdf` -> `Canmore (1)`
+- `Glass Order - 260515 Kinspace 10698.pdf` -> `10698`
+- `Glass Order - 260515 Kinspace 10695.pdf` -> `10695`
+- `Glass Order - 260515 Acme- 328.pdf` -> `328`
+- `Glass Order - 260512 Sohal Glass Jackso.pdf` -> `Jackso`
+
+解析规则按优先级执行：
+
+1. 去掉 `.pdf` 扩展名。
+2. 容忍大小写、空格和不同横线，去掉开头 `Glass Order -`。
+3. 去掉后面的 6 位日期 token，例如 `260514`。
+4. 如果剩余内容里有显式 `PO xxx`，优先取 `PO xxx`，统一规范为大写 `PO` 加单空格。
+5. 否则如果末尾是数字 token，取末尾数字，例如 `10698`、`328`。
+6. 否则如果存在横线分段，取最后一个有效分段，例如 `You -Canmore (1)` 取 `Canmore (1)`。
+7. 否则取最后一个有效词，例如 `Sohal Glass Jackso` 取 `Jackso`。
+
+无法按以上规则得到 PO 时，上传接口返回 400，并提示按命名规则修改 PDF 文件名。
+
+### 数据模型策略
+客户已确认当前业务数据不多，可以在代码验证通过后清空业务数据并重新上传 PDF。因此本阶段采用直接方案：`orders.order_number` 就是 PO，不再保留一套客户看不懂的内部订单号。
+
+- 新上传订单的 `order_number` 直接写入识别出的 PO，例如 `PO 546`、`Canmore (1)`、`10698`。
+- 新增 `orders.order_number_key` 作为唯一判断辅助字段，统一大小写、去掉空白/标点，避免 `Canmore (1)` 和 `canmore(1)` 被当成两个订单。
+- 保留现有 `orders.order_number UNIQUE`，并额外建立 `order_number_key` 唯一索引。
+- 正式库上线前先备份，然后清空业务表和 uploads，再重新上传 PDF。
+- 保留现有 `source_file_hash` 重复 PDF 检查；新需求额外增加“不同 PDF 但同 PO”的重复检查。
+
+### 后端任务
+- 新增 `backend/services/poCode.js`：
+  - `extractPoCodeFromFilename(originalName)`
+  - `normalizePoCode(value)`
+  - `poCodeKey(value)`
+- 在 `backend/db.js` 增加 migration：
+  - `orders.order_number_key TEXT`
+  - 唯一索引 `idx_orders_order_number_key_unique`，仅对非空值生效。
+- 修改 `POST /api/orders`：
+  - 上传后先从 `req.file.originalname` 识别 PO。
+  - 先查 `order_number_key` 是否已存在；存在则删除临时上传文件并返回 409。
+  - 返回错误建议：`PO 10698 already exists. Please rename the PDF and upload again.`
+  - 停用当前 `uniqueOrderNumber()` 自动加 `-2` 的行为。
+  - 插入订单时写入 `order_number = PO` 和 `order_number_key`。
+- 修改订单查询接口：
+  - `GET /api/orders?po=...` 支持精确查询。
+  - 现有 `order_number` 参数保留兼容。
+  - 模糊搜索继续匹配 `order_number`，也支持去空格、括号和横线后的 PO 搜索。
+- 修改取货相关接口：
+  - 按订单查询/客户签字流程支持 PO 精确查找。
+
+### 前端任务
+- 新建订单页面：
+  - 用户选择 PDF 后立即显示“识别到的 PO：xxx”。
+  - 无法识别时显示文件名规则提示，并阻止提交。
+  - 后端返回重复 PO 409 时，明确提示“PO xxx 已存在，请修改 PDF 文件名后重新上传”。
+- 老板仪表盘、订单详情、客户汇总、取货页面、取货批次、工人队列、工人片子页面：
+  - 显示文案从“订单号/#order_number”调整为“PO xxx”。
+  - 搜索框 placeholder 改为“搜索 PO / 公司名 / 项目”。
+  - 展示字段使用 `order_number`，但渲染为客户能看懂的 PO 标签。
+- 取货签字/客户查询：
+  - 支持输入 PO 查订单或限定客户下的订单。
+  - 避免只靠内部自增 `order_id` 暴露给客户操作。
+
+### 测试与验证
+- 解析单元脚本：`scripts/po-code-parse-qa.js`
+  - 覆盖 6 个样例，结果必须完全匹配。
+  - 覆盖大小写、额外空格、不同横线、无法识别、重复空白规范化。
+- 上传接口脚本：`scripts/po-code-upload-qa.js`
+  - 上传样例 PDF，确认订单 `order_number` 为识别值。
+  - 上传不同内容但相同 PO 的 PDF，必须 409，DB 不新增订单，uploads 不残留孤儿文件。
+  - 上传同内容 PDF，仍由 `source_file_hash` 返回 409。
+  - 上传无法识别 PO 的文件名，必须 400。
+- 搜索/页面验证：
+  - 老板页面按 PO 搜索能找到订单。
+  - 工人页面显示 PO。
+  - 取货选择和批次详情显示 PO。
+  - 客户汇总/签字查询可按 PO 定位。
+- 清库重传验证：
+  - 上线前运行正式库备份。
+  - 确认代码验证通过后，使用受保护的清理脚本清空业务表和 uploads。
+  - 重新上传 PDF 后，订单列表、工人页面、取货页面都只显示 PO。
+
+### 验收标准
+- 6 个样例文件名全部识别为指定 PO。
+- 新上传订单的唯一业务编码为 PO，不再自动追加 `-2`、`-3`。
+- 同 PO 重复上传一定返回 409，并给出修改 PDF 文件名的清晰提示。
+- 老板、员工、取货、客户汇总页面都能看到并搜索 PO。
+- 正式清库前必须完成备份；清库后重新上传的订单均以 PO 作为 `order_number`。
+- 全部测试只使用 `ENV_FILE=backend/.env.codex-qa`，不污染正式数据。
+
+### 验证命令
+```bash
+ENV_FILE=backend/.env.codex-qa node scripts/po-code-parse-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/po-code-upload-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js
+ENV_FILE=backend/.env.codex-qa ./scripts/smoke.sh
+git diff --check -- glassorder
+```
+
+### 实施结果
+- 已新增 `backend/services/poCode.js`，上传 PDF 时从文件名识别 PO，并把 `orders.order_number` 直接写为 PO。
+- 已新增 `orders.order_number_key` migration 和唯一索引，用规范化 key 拦截大小写、空格、括号、横线差异造成的重复 PO。
+- 已停用自动追加 `-2`、`-3` 的订单号逻辑；同 PO 上传返回 409 `DUPLICATE_PO`，无法识别 PO 返回 400 `PO_FILENAME_INVALID`。
+- 已新增 `GET /api/orders?po=...`，并在查询层兼容 `PO 546` / `546` 这类取货员常见输入。
+- 已在取货 API 增加 `po` 过滤；取货页面顶部新增 PO 搜索框，取货员只知道 PO 时可自动定位客户并只显示该 PO 的可取玻璃片。
+- 老板、工人、取货批次、客户汇总、交割单、邮件主题/附件等显示已统一改为 PO 文案。
+- 新订单页面选择 PDF 后会显示识别到的 PO；重复 PO 和无效文件名都有明确提示。
+- QA 脚本已改为使用符合 PO 规则的 PDF 文件名，避免测试污染正式命名规则。
+
+### 验证结果（codex QA 隔离环境）
+- `ENV_FILE=backend/.env.codex-qa node scripts/po-code-parse-qa.js` ✅，覆盖客户给出的 6 个样例、大小写/空格/Unicode 横线、描述里重复出现 PO、`PO 546`/`546` 查询兼容。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/po-code-upload-qa.js` ✅，验证新订单 `order_number=PO`、重复 PO 409、重复 PDF hash 409、无效文件名 400。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh` ✅，验证订单创建、PO 查询、重复上传清理、工序、取货、邮件跳过、回退、归档。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js` ✅，包含“只输入 PO 查找取货片”的浏览器验证。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/security-regression.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-cc-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/summary-smoke.js` ✅。
+- 静态检查通过：`node --check`、`bash -n`、`git diff --check -- PLAN.md backend frontend scripts` ✅。
+- 默认正式库 dry-run 已执行，没有清数据：清理前 `customers=10, orders=32, pieces=322, events=727, pickup_batches=9, pickup_items=214, uploads=563`；`users=2` 和 `schema_migrations=8` 会保留。
+- 正式库已按客户确认执行备份后清空：备份目录 `backups/20260607-200417-clear`；清理后业务表全 0、uploads 文件数 0，`users=2` 保留，服务 `http://localhost:8781/api/health` 正常。
+
+### 风险与结论
+这是可改的。由于客户已确认可以清空业务数据并重新上传，风险比历史迁移方案低：不需要把旧 `number_order` 映射成 PO，也不需要保留两套编号。主要风险集中在文件名识别和重复 PO 拦截，必须通过样例解析、上传重复、老板搜索、工人显示和取货显示这些 QA 后再清正式库。

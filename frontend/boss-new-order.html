@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>New Order</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 <div class="topbar">
@@ -55,6 +55,9 @@
       <div style="font-size:12px; color:var(--text-2); font-weight: 500;" data-i18n="pdfAutoParse">系统自动解析片数、尺寸并按页拆图</div>
       <input id="pdf" type="file" style="display:none;" accept="application/pdf,.pdf">
     </label>
+    <div id="poPreview" class="form-hint" data-state="empty" data-i18n="poFilenameHint">
+      文件名需包含 PO，例如 Glass Order - 260515 Kinspace 10698.pdf
+    </div>
 
     <label class="form-label" style="margin-top: 14px;" data-i18n="noteLabel">备注（可选）</label>
     <textarea class="form-textarea" id="note" rows="3" data-i18n-placeholder="notePlaceholder" placeholder="特殊要求、HOLD 片编号、客户嘱托等"></textarea>
@@ -66,13 +69,85 @@
   <button class="btn btn-primary" id="createBtn" onclick="createOrder()" data-i18n="publishOrder">发布到车间</button>
 </div>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 let customerPicker = null;
+let detectedPo = '';
+
+function normalizePoCandidate(value) {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s#._:-]+/, '')
+    .replace(/[\s#._:-]+$/, '')
+    .trim();
+  const explicit = text.match(/^P\.?\s*O\.?(?=\s|[-#:._]|\d|$)\s*[-#:._]*\s*(.+)$/i);
+  if (explicit) {
+    const code = explicit[1].replace(/^[\s#._:-]+/, '').replace(/[\s#._:-]+$/, '').trim();
+    return code ? `PO ${code}` : '';
+  }
+  return text;
+}
+
+function explicitPoFromTail(text) {
+  const marker = /(?:^|[\s-])P\.?\s*O\.?(?=\s|[-#:._]|\d|$)\s*[-#:._]*\s*/gi;
+  let match;
+  let last = null;
+  while ((match = marker.exec(text)) !== null) {
+    last = match;
+  }
+  if (!last) return '';
+  return text.slice(last.index + last[0].length)
+    .replace(/^[\s#._:-]+/, '')
+    .replace(/[\s#._:-]+$/, '')
+    .trim();
+}
+
+function extractPoFromFilename(name) {
+  const stem = String(name || '').replace(/\.pdf$/i, '')
+    .normalize('NFKC')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const prefix = stem.match(/^glass\s*order\s*[-:]*\s*(.+)$/i);
+  if (!prefix) return '';
+  const date = prefix[1].trim().match(/^(\d{6,8})\b\s*(.+)$/);
+  if (!date) return '';
+  const tail = date[2].replace(/^[\s#._:-]+/, '').replace(/[\s#._:-]+$/, '').trim();
+  const explicit = explicitPoFromTail(tail);
+  if (explicit) return normalizePoCandidate(`PO ${explicit}`);
+  const tailNumber = tail.match(/(?:^|[\s_-])(\d+)\s*$/);
+  if (tailNumber) return normalizePoCandidate(tailNumber[1]);
+  const dashParts = tail.split(/\s*-+\s*/).map(normalizePoCandidate).filter(Boolean);
+  if (dashParts.length > 1) return dashParts[dashParts.length - 1];
+  const words = tail.split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const last = words[words.length - 1];
+  if (/^\([^)]+\)$/.test(last) && words.length > 1) return normalizePoCandidate(`${words[words.length - 2]} ${last}`);
+  return normalizePoCandidate(last);
+}
+
+function updatePoPreview(file) {
+  const box = document.getElementById('poPreview');
+  detectedPo = file ? extractPoFromFilename(file.name) : '';
+  if (!file) {
+    box.dataset.state = 'empty';
+    box.textContent = t('poFilenameHint');
+    return;
+  }
+  if (detectedPo) {
+    box.dataset.state = 'ok';
+    box.textContent = tn('poDetected', { po: detectedPo });
+  } else {
+    box.dataset.state = 'error';
+    box.textContent = t('poFilenameInvalid');
+  }
+}
 
 async function loadCustomers() {
   const data = await api('/api/customers');
@@ -84,6 +159,7 @@ document.getElementById('deadline').valueAsDate = new Date(Date.now() + 7 * 8640
 document.getElementById('pdf').addEventListener('change', (e) => {
   const file = e.target.files[0];
   document.getElementById('fileLabel').textContent = file ? file.name : t('pickPdfHint');
+  updatePoPreview(file);
 });
 
 async function createOrder() {
@@ -91,6 +167,7 @@ async function createOrder() {
   const file = document.getElementById('pdf').files[0];
   if (!customerId) return toast(t('pickCustomerFirst'), { type: 'danger' });
   if (!file) return toast(t('pickPdfFirst'), { type: 'danger' });
+  if (!detectedPo) return toast(t('poFilenameInvalid'), { type: 'danger' });
   if (file.size > MAX_PDF_BYTES) {
     return toast('PDF > 25MB', { type: 'danger' });
   }
@@ -112,7 +189,13 @@ async function createOrder() {
       const data = await api('/api/orders', { method: 'POST', body: form });
       location.href = 'boss-order-detail.html?id=' + data.order.id;
     } catch (err) {
-      toast(err.message, { type: 'danger' });
+      if (err && err.data && err.data.code === 'DUPLICATE_PO') {
+        toast(tn('duplicatePoToast', { po: err.data.po || detectedPo || err.data.order_number || '' }), { type: 'danger' });
+      } else if (err && err.data && err.data.code === 'PO_FILENAME_INVALID') {
+        toast(t('poFilenameInvalid'), { type: 'danger' });
+      } else {
+        toast(err.message, { type: 'danger' });
+      }
     }
   });
 }

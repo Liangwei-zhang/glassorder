@@ -619,7 +619,7 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     setTimeout(() => sessionStorage.removeItem('__sw_reloaded__'), 5000);
   });
 }
-const STAGES = ['cut', 'edge', 'tempered', 'finished'];
+const STAGES = ['cut', 'edge', 'tempered', 'polish', 'finished'];
 // Backwards-compat: STAGE_ZH proxy resolves through i18n at access time.
 const STAGE_ZH = new Proxy({}, {
   get(_, key) {
@@ -814,8 +814,15 @@ function brokenCount(o) {
   return (o.pieces || []).filter(p => p.broken).length;
 }
 
+function orderCodeText(value) {
+  const raw = typeof value === 'object' && value ? value.order_number : value;
+  const code = String(raw || '').trim();
+  if (!code) return 'PO -';
+  return /^PO\b/i.test(code) ? code : `PO ${code}`;
+}
+
 function orderTitle(o) {
-  return `#${esc(o.order_number)} · ${esc(o.company)}`;
+  return `${esc(orderCodeText(o))} · ${esc(o.company)}`;
 }
 
 function isOverdue(o) {
@@ -889,6 +896,7 @@ function customerSearchText(c) {
     c && c.contact_name,
     c && c.phone,
     c && c.email,
+    c && c.email_cc,
     c && c.notes,
   ].filter(Boolean).join(' '));
 }
@@ -925,7 +933,7 @@ function initCustomerPicker({ root, customers, onSelect, placeholder, emptyText 
     if (!q) return list.slice(0, 40);
     return list
       .map((c, index) => {
-        const fields = [c.company, c.contact_name, c.phone, c.email].map(normText);
+        const fields = [c.company, c.contact_name, c.phone, c.email, c.email_cc].map(normText);
         const haystack = customerSearchText(c);
         if (!haystack.includes(q)) return null;
         let score = 40;
@@ -962,7 +970,7 @@ function initCustomerPicker({ root, customers, onSelect, placeholder, emptyText 
     results.innerHTML = rows.map((c, i) => `
       <button type="button" class="customer-picker-option ${i === activeIndex ? 'active' : ''}" data-id="${c.id}">
         <div class="customer-picker-name">${esc(c.company || '')}</div>
-        <div class="customer-picker-meta">${esc([c.contact_name, c.phone, c.email].filter(Boolean).join(' · ') || t('noPhone'))}</div>
+        <div class="customer-picker-meta">${esc([c.contact_name, c.phone, c.email, c.email_cc].filter(Boolean).join(' · ') || t('noPhone'))}</div>
       </button>`).join('');
   }
 

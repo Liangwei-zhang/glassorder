@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Order Detail</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 <div class="topbar">
@@ -44,8 +44,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 const id = new URLSearchParams(location.search).get('id');
@@ -78,7 +78,7 @@ function render() {
     document.getElementById('body').innerHTML = `<div class="card">${esc(t('requestFailed'))}</div>`;
     return;
   }
-  document.getElementById('title').textContent = `#${order.order_number} · ${order.company}`;
+  document.getElementById('title').textContent = `${orderCodeText(order)} · ${order.company}`;
   const backHref = order.archived_at ? 'boss-dashboard.html?archived=1' : 'boss-dashboard.html';
   const backBtn = document.querySelector('.back-btn');
   if (backBtn) backBtn.href = backHref;
@@ -279,7 +279,7 @@ function openOrderMenu(event) {
 }
 
 function pieceStepChecked(piece, step) {
-  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
   return required.includes(step) ? 'checked' : '';
 }
 
@@ -296,6 +296,7 @@ function openEdit() {
         <label><input type="checkbox" data-step="cut" ${pieceStepChecked(p, 'cut')}> ${esc(stageLabel('cut'))}</label>
         <label><input type="checkbox" data-step="edge" ${pieceStepChecked(p, 'edge')}> ${esc(stageLabel('edge'))}</label>
         <label><input type="checkbox" data-step="tempered" ${pieceStepChecked(p, 'tempered')}> ${esc(stageLabel('tempered'))}</label>
+        <label><input type="checkbox" data-step="polish" ${pieceStepChecked(p, 'polish')}> ${esc(stageLabel('polish'))}</label>
       </div>
     </div>`).join('');
   document.getElementById('editModal').classList.add('open');

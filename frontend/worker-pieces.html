@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Piece Grid</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 <div class="topbar">
@@ -27,6 +27,7 @@
   <button class="stage-tab" data-stage="cut"><span data-i18n="stageCut">切</span></button>
   <button class="stage-tab" data-stage="edge"><span data-i18n="stageEdge">开切口</span></button>
   <button class="stage-tab" data-stage="tempered"><span data-i18n="stageTempered">钢化</span></button>
+  <button class="stage-tab" data-stage="polish"><span data-i18n="stagePolish">打磨</span></button>
   <button class="stage-tab" data-stage="finished"><span data-i18n="stageFinished">完成</span></button>
 </div>
 
@@ -76,6 +77,8 @@
         <div style="font-size: 16px; font-weight: 700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="fullTitle"></div>
         <div style="font-size: 12px; opacity: .8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="fullSub"></div>
       </div>
+      <button id="drawingPrevBtn" class="drawing-nav-btn" type="button" onclick="navigateFullDrawing(-1)" data-i18n-title="previousPiece" title="上一片" aria-label="previous piece">‹</button>
+      <button id="drawingNextBtn" class="drawing-nav-btn" type="button" onclick="navigateFullDrawing(1)" data-i18n-title="nextPiece" title="下一片" aria-label="next piece">›</button>
       <div style="font-size: 12px; opacity: .75; min-width: 44px; text-align:right;" id="zoomLabel">100%</div>
     </div>
     <div id="viewer" style="flex:1; overflow: hidden; position: relative; touch-action: none; background: #222; cursor: grab;">
@@ -109,8 +112,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 ensureAuth();
 const params = new URLSearchParams(location.search);
@@ -153,7 +156,7 @@ async function loadOrder() {
 
 function headerRender() {
   document.getElementById('title').textContent = t('pieceGrid');
-  document.getElementById('sub').textContent = `${t('workOrder')} #${order.order_number}`;
+  document.getElementById('sub').textContent = `${t('workOrder')} ${orderCodeText(order)}`;
   document.getElementById('orderContextCompany').textContent = order.company || t('pieceGrid');
   document.getElementById('orderContextMeta').textContent = order.project_name || t('notSet');
 }
@@ -252,14 +255,20 @@ function renderActionBar() {
   const ab = document.getElementById('actionBar');
   if (selectMode) {
     const n = selectedIds.size;
+    const view = piecesInView();
+    const selectedInView = view.filter((p) => selectedIds.has(Number(p.id))).length;
     const dis = n === 0 ? 'disabled style="opacity:.5;"' : '';
+    ab.classList.add('select-actions');
     ab.innerHTML = `
       <button class="btn btn-ghost back" onclick="exitSelectMode()">${esc(t('cancel'))}</button>
+      <button class="btn btn-ghost" id="selectAllViewBtn" ${view.length === 0 || selectedInView === view.length ? 'disabled style="opacity:.5;"' : ''} onclick="selectAllInView()">${esc(t('selectAll'))}</button>
+      <button class="btn btn-ghost" id="clearSelectionBtn" ${n === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="clearSelection()">${esc(t('clearSelection'))}</button>
       <button class="btn btn-success" ${dis} onclick="batchAction('complete')">${esc(t('batchComplete'))} ${n ? '(' + n + ')' : ''}</button>
       <button class="menu-trigger" ${n === 0 ? 'disabled style="opacity:.45;"' : ''} onclick="openBatchMenu(event)" aria-label="more">⋯</button>`;
     document.getElementById('selectToggle').classList.add('on');
     document.getElementById('selectToggle').textContent = t('exitSelect');
   } else {
+    ab.classList.remove('select-actions');
     ab.innerHTML = `
       <a class="btn btn-ghost back" href="${escAttr(backTarget)}">${esc(t('back'))}</a>
       <button class="btn btn-primary" id="refreshBtn" onclick="refreshOrder(event)">${esc(t('refresh'))}</button>`;
@@ -288,6 +297,20 @@ function toggleSelectMode() {
 
 function exitSelectMode() {
   selectMode = false;
+  selectedIds.clear();
+  rangeAnchorId = null;
+  render();
+}
+
+function selectAllInView() {
+  if (!selectMode) selectMode = true;
+  const view = piecesInView();
+  view.forEach((p) => selectedIds.add(Number(p.id)));
+  if (view.length) rangeAnchorId = Number(view[view.length - 1].id);
+  render();
+}
+
+function clearSelection() {
   selectedIds.clear();
   rangeAnchorId = null;
   render();
@@ -343,7 +366,7 @@ function openPieceModal(id) {
   else if (p.hold) statusHtml = `<b style="color: var(--warn);">${esc(t('statusHoldLine'))}</b>`;
   else if (p.stage === 'finished') statusHtml = `<b style="color: var(--success);">${esc(t('statusFinishedLine'))}</b>`;
   else statusHtml = `<b>${esc(tn('statusCurrentLine', { stage: stageLabel(p.stage) }))}</b>`;
-  const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
   const requiredText = required.map(s => stageLabel(s)).join(' → ');
   document.getElementById('mStatus').innerHTML = `${statusHtml}<div style="margin-top:6px; color: var(--text-2); font-size:12px;">${esc(t('requiredSteps'))}: ${esc(requiredText)}</div>`;
 
@@ -363,22 +386,23 @@ function openPieceModal(id) {
     ab.innerHTML = `<button class="btn btn-success tap-lg" onclick="completeStage()">${esc(nextLabel)}</button>
       <button class="btn btn-danger tap-lg" onclick="askBroken()">${esc(t('brokenBtn'))}</button>
       <button class="btn btn-warn" onclick="toggleHold(event)">${esc(t('holdBtn'))}</button>`;
-    const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered'];
-    const isCustom = required.length !== 3
-      || !required.includes('cut') || !required.includes('edge') || !required.includes('tempered');
+    const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
+    const isCustom = required.length !== 4
+      || !required.includes('cut') || !required.includes('edge')
+      || !required.includes('tempered') || !required.includes('polish');
     const advLinks = [];
     const isMirror = required.length === 1 && required[0] === 'cut';
     if (required.includes('tempered')) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge'])">${esc(t('skipTempered'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','polish'])">${esc(t('skipTempered'))}</button>`);
     }
     if (required.includes('edge')) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered'])">${esc(t('skipOpening'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered','polish'])">${esc(t('skipOpening'))}</button>`);
     }
     if (!isMirror) {
       advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut'])">${esc(t('mirrorOnly'))}</button>`);
     }
     if (isCustom) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','tempered'])">${esc(t('restoreSteps'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','tempered','polish'])">${esc(t('restoreSteps'))}</button>`);
     }
     adv.innerHTML = advLinks.join(' · ');
   }
@@ -427,10 +451,10 @@ function openBatchMenu(event) {
     { label: t('batchHold'), onClick: () => batchAction('hold') },
     { label: t('batchUnhold'), onClick: () => batchAction('unhold') },
     { divider: true },
-    { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered']) },
-    { label: t('noTempered'), onClick: () => batchConfig(['cut','edge']) },
+    { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered','polish']) },
+    { label: t('noTempered'), onClick: () => batchConfig(['cut','edge','polish']) },
     { label: t('batchMirror'), onClick: () => batchConfig(['cut']) },
-    { label: t('restoreAllSteps'), onClick: () => batchConfig(['cut','edge','tempered']) },
+    { label: t('restoreAllSteps'), onClick: () => batchConfig(['cut','edge','tempered','polish']) },
     { divider: true },
     { label: t('batchBroken'), danger: true, onClick: () => batchAction('broken') },
   ];
@@ -480,38 +504,394 @@ async function batchConfig(requiredSteps) {
 
 function openFullDrawing() {
   if (!currentPiece || !currentPiece.drawing_path) return;
-  document.getElementById('fullTitle').textContent = `${tn('pieceN', { n: currentPiece.piece_no })} · ${currentPiece.thickness || ''} ${currentPiece.type || ''}`;
-  document.getElementById('fullSub').textContent = `${currentPiece.size || ''}${currentPiece.weight ? ' · ' + currentPiece.weight : ''}`;
-  const img = document.getElementById('fullDrawing');
-  const pieceId = Number(currentPiece.id);
-  img.removeAttribute('src');
-  authFileUrl(currentPiece.drawing_path).then((url) => {
-    if (!currentPiece || Number(currentPiece.id) !== pieceId) return;
-    img.src = url;
-    img.onload = () => fitImageToViewer();
-  }).catch((err) => toast(err.message, { type: 'danger' }));
+  loadFullDrawingForCurrentPiece();
   document.getElementById('pieceModal').classList.remove('open');
   document.getElementById('drawingModal').classList.add('open');
+}
+
+function drawingPiecesInScope() {
+  if (!order || !currentPiece) return [];
+  const view = piecesInView();
+  const source = view.some((p) => Number(p.id) === Number(currentPiece.id)) ? view : order.pieces;
+  return source.filter((p) => p.drawing_path);
+}
+
+function currentDrawingIndex(list = drawingPiecesInScope()) {
+  if (!currentPiece) return -1;
+  return list.findIndex((p) => Number(p.id) === Number(currentPiece.id));
+}
+
+const DRAWING_SLIDE_MS = 300;
+let drawingTransition = { active: false, offset: 0, token: 0 };
+let drawingPreview = null;
+const drawingWarmCache = new Set();
+
+function drawingMotionMs(ms = DRAWING_SLIDE_MS) {
+  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : ms;
+}
+
+function drawingPieceAtDelta(delta) {
+  const list = drawingPiecesInScope();
+  const idx = currentDrawingIndex(list);
+  return list[idx + delta] || null;
+}
+
+function setCurrentDrawingMeta() {
+  if (!currentPiece) return;
+  document.getElementById('fullTitle').textContent = `${tn('pieceN', { n: currentPiece.piece_no })} · ${currentPiece.thickness || ''} ${currentPiece.type || ''}`;
+  updateDrawingNav();
+}
+
+function fitGeometryForImage(img) {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || !img || !img.naturalWidth) return null;
+  const scale = Math.min(viewer.clientWidth / img.naturalWidth, viewer.clientHeight / img.naturalHeight);
+  return {
+    scale,
+    tx: (viewer.clientWidth - img.naturalWidth * scale) / 2,
+    ty: (viewer.clientHeight - img.naturalHeight * scale) / 2,
+  };
+}
+
+function applyDrawingLayerBase(img) {
+  img.style.position = 'absolute';
+  img.style.left = '0';
+  img.style.top = '0';
+  img.style.transformOrigin = '0 0';
+  img.style.background = 'white';
+  img.style.userSelect = 'none';
+  img.style.webkitUserDrag = 'none';
+  img.style.pointerEvents = 'none';
+}
+
+function setLayerTransition(img, on, ms = DRAWING_SLIDE_MS) {
+  if (!img) return;
+  if (on) {
+    const duration = drawingMotionMs(ms);
+    img.style.transition = `transform ${duration}ms cubic-bezier(.22,.9,.2,1), opacity ${Math.max(1, duration - 40)}ms var(--ease-out)`;
+  } else {
+    img.style.transition = 'none';
+  }
+}
+
+function removeDrawingPreview() {
+  if (drawingPreview && drawingPreview.img) drawingPreview.img.remove();
+  drawingPreview = null;
+}
+
+function positionDrawingPreview(offset = drawingTransition.offset || 0, animated = false, ms = 180) {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || !drawingPreview || !drawingPreview.ready || !drawingPreview.fit) return;
+  const { img, delta, fit } = drawingPreview;
+  setLayerTransition(img, animated, ms);
+  img.style.transform = `translate(${fit.tx + delta * viewer.clientWidth + offset}px, ${fit.ty}px) scale(${fit.scale})`;
+  img.style.opacity = '1';
+}
+
+function ensureDrawingPreview(delta) {
+  const viewer = document.getElementById('viewer');
+  const piece = drawingPieceAtDelta(delta);
+  if (!viewer || !piece || !piece.drawing_path) {
+    removeDrawingPreview();
+    return null;
+  }
+  if (drawingPreview
+    && Number(drawingPreview.pieceId) === Number(piece.id)
+    && Number(drawingPreview.delta) === Number(delta)) {
+    return drawingPreview;
+  }
+
+  removeDrawingPreview();
+  const token = drawingTransition.token;
+  const img = document.createElement('img');
+  img.className = 'drawing-preview-img drawing-transition-img';
+  applyDrawingLayerBase(img);
+  img.style.zIndex = '1';
+  img.style.opacity = '0';
+  img.style.transition = 'none';
+  viewer.appendChild(img);
+  drawingPreview = {
+    pieceId: Number(piece.id),
+    piece,
+    delta,
+    img,
+    fit: null,
+    ready: false,
+    token,
+  };
+
+  authFileUrl(piece.drawing_path).then((url) => {
+    const preview = drawingPreview;
+    if (!preview || preview.img !== img || preview.token !== drawingTransition.token) return Promise.resolve();
+    return waitImageLoad(img, url).then(() => {
+      const activePreview = drawingPreview;
+      if (!activePreview || activePreview.img !== img || activePreview.token !== drawingTransition.token) return;
+      activePreview.fit = fitGeometryForImage(img);
+      activePreview.ready = Boolean(activePreview.fit);
+      positionDrawingPreview(drawingTransition.offset || 0, false);
+    });
+  }).catch(() => {
+    if (drawingPreview && drawingPreview.img === img) removeDrawingPreview();
+  });
+  return drawingPreview;
+}
+
+function setDrawingImgTransition(on, ms = DRAWING_SLIDE_MS) {
+  const img = document.getElementById('fullDrawing');
+  if (!img) return;
+  if (on) {
+    const duration = drawingMotionMs(ms);
+    img.classList.add('drawing-animating');
+    img.classList.remove('drawing-dragging');
+    img.style.transition = `transform ${duration}ms cubic-bezier(.22,.9,.2,1), opacity ${Math.max(1, duration - 40)}ms var(--ease-out)`;
+  } else {
+    img.classList.remove('drawing-animating');
+    img.style.transition = '';
+  }
+}
+
+function setDrawingOffset(offset, animated = false, ms = 180) {
+  drawingTransition.offset = offset;
+  setDrawingImgTransition(animated, ms);
+  const img = document.getElementById('fullDrawing');
+  if (img && !animated) img.classList.add('drawing-dragging');
+  applyTransform();
+  positionDrawingPreview(offset, animated, ms);
+}
+
+function snapDrawingOffset() {
+  const img = document.getElementById('fullDrawing');
+  if (Math.abs(drawingTransition.offset) < 0.5) {
+    drawingTransition.offset = 0;
+    setDrawingImgTransition(false);
+    if (img) img.classList.remove('drawing-dragging');
+    applyTransform();
+    removeDrawingPreview();
+    return;
+  }
+  setDrawingOffset(0, true, 180);
+  window.setTimeout(() => {
+    if (!drawingTransition.active) setDrawingImgTransition(false);
+    if (!drawingTransition.active) removeDrawingPreview();
+  }, drawingMotionMs(190));
+}
+
+function drawingAtFit() {
+  return Math.abs(zoomState.scale - zoomState.fitScale) / Math.max(zoomState.fitScale, 0.001) < 0.12;
+}
+
+function waitImageLoad(img, url) {
+  return new Promise((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error(t('drawingFailed')));
+    img.src = url;
+    if (img.complete && img.naturalWidth) resolve();
+  });
+}
+
+function warmAdjacentDrawingImages() {
+  [-1, 1].forEach((delta) => {
+    const piece = drawingPieceAtDelta(delta);
+    if (!piece || !piece.drawing_path || drawingWarmCache.has(piece.drawing_path)) return;
+    drawingWarmCache.add(piece.drawing_path);
+    authFileUrl(piece.drawing_path).then((url) => {
+      const probe = new Image();
+      probe.decoding = 'async';
+      probe.src = url;
+    }).catch(() => {});
+  });
+}
+
+function updateDrawingNav() {
+  const list = drawingPiecesInScope();
+  const idx = currentDrawingIndex(list);
+  const count = list.length;
+  const prev = document.getElementById('drawingPrevBtn');
+  const next = document.getElementById('drawingNextBtn');
+  const locked = drawingTransition.active;
+  if (prev) prev.disabled = locked || idx <= 0;
+  if (next) next.disabled = locked || idx < 0 || idx >= count - 1;
+  const sub = document.getElementById('fullSub');
+  if (sub && currentPiece) {
+    const ordinal = idx >= 0 && count > 1 ? ` · ${idx + 1}/${count}` : '';
+    sub.textContent = `${currentPiece.size || ''}${currentPiece.weight ? ' · ' + currentPiece.weight : ''}${ordinal}`;
+  }
+}
+
+function loadFullDrawingForCurrentPiece() {
+  if (!currentPiece || !currentPiece.drawing_path) return;
+  setCurrentDrawingMeta();
+  const img = document.getElementById('fullDrawing');
+  const pieceId = Number(currentPiece.id);
+  const token = ++drawingTransition.token;
+  drawingTransition.active = false;
+  drawingTransition.offset = 0;
+  removeDrawingPreview();
+  setDrawingImgTransition(false);
+  img.classList.remove('drawing-dragging');
+  img.style.opacity = '1';
+  img.style.zIndex = '2';
+  img.removeAttribute('src');
+  authFileUrl(currentPiece.drawing_path).then((url) => {
+    if (!currentPiece || Number(currentPiece.id) !== pieceId || token !== drawingTransition.token) return Promise.resolve();
+    return waitImageLoad(img, url).then(() => {
+      if (!currentPiece || Number(currentPiece.id) !== pieceId || token !== drawingTransition.token) return;
+      fitImageToViewer();
+    });
+  }).catch((err) => toast(err.message, { type: 'danger' }));
+}
+
+function navigateFullDrawing(delta) {
+  if (!currentPiece || drawingTransition.active) return;
+  const list = drawingPiecesInScope();
+  const idx = currentDrawingIndex(list);
+  const next = list[idx + delta];
+  if (!next) return;
+  animateFullDrawingTransition(next, delta).catch((err) => toast(err.message, { type: 'danger' }));
+}
+
+async function animateFullDrawingTransition(nextPiece, delta) {
+  const viewer = document.getElementById('viewer');
+  const img = document.getElementById('fullDrawing');
+  if (!viewer || !img || !nextPiece || !nextPiece.drawing_path) return;
+  if (!img.src || !img.naturalWidth || drawingMotionMs() <= 1) {
+    currentPiece = nextPiece;
+    loadFullDrawingForCurrentPiece();
+    return;
+  }
+
+  const token = ++drawingTransition.token;
+  const oldZoom = { ...zoomState };
+  const oldOffset = drawingTransition.offset || 0;
+  const oldTransform = `translate(${oldZoom.tx + oldOffset}px, ${oldZoom.ty}px) scale(${oldZoom.scale})`;
+  const outgoing = img.cloneNode(false);
+  outgoing.removeAttribute('id');
+  outgoing.className = 'drawing-transition-img';
+  applyDrawingLayerBase(outgoing);
+  outgoing.style.zIndex = '2';
+  outgoing.style.transform = oldTransform;
+  outgoing.style.opacity = '1';
+  outgoing.style.transition = 'none';
+  viewer.appendChild(outgoing);
+
+  drawingTransition.active = true;
+  removeDrawingPreview();
+  updateDrawingNav();
+  img.style.opacity = '0';
+  img.style.zIndex = '1';
+  setDrawingImgTransition(false);
+  img.classList.remove('drawing-dragging');
+
+  try {
+    const url = await authFileUrl(nextPiece.drawing_path);
+    if (token !== drawingTransition.token) return;
+    await waitImageLoad(img, url);
+    if (token !== drawingTransition.token) return;
+    currentPiece = nextPiece;
+    setCurrentDrawingMeta();
+    fitImageToViewer({ offset: delta * viewer.clientWidth });
+    img.style.opacity = '1';
+    const duration = drawingMotionMs();
+    const oldTarget = `translate(${oldZoom.tx - delta * (viewer.clientWidth + 32)}px, ${oldZoom.ty}px) scale(${oldZoom.scale})`;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    img.style.transition = `transform ${duration}ms cubic-bezier(.22,.9,.2,1), opacity ${Math.max(1, duration - 40)}ms var(--ease-out)`;
+    img.classList.add('drawing-animating');
+    outgoing.style.transition = `transform ${duration}ms cubic-bezier(.22,.9,.2,1), opacity ${Math.max(1, duration - 40)}ms var(--ease-out)`;
+    drawingTransition.offset = 0;
+    applyTransform();
+    outgoing.style.transform = oldTarget;
+    outgoing.style.opacity = '.88';
+    await new Promise((resolve) => window.setTimeout(resolve, duration + 40));
+  } finally {
+    if (token === drawingTransition.token) {
+      drawingTransition.active = false;
+      drawingTransition.offset = 0;
+      setDrawingImgTransition(false);
+      img.classList.remove('drawing-dragging');
+      img.style.opacity = '1';
+      img.style.zIndex = '2';
+      applyTransform();
+      updateDrawingNav();
+    }
+    outgoing.remove();
+  }
+}
+
+async function finishDrawingSwipe(delta) {
+  const nextPiece = drawingPieceAtDelta(delta);
+  const viewer = document.getElementById('viewer');
+  const img = document.getElementById('fullDrawing');
+  const preview = drawingPreview;
+  if (!viewer || !img || !nextPiece) {
+    snapDrawingOffset();
+    return;
+  }
+  if (!preview
+    || !preview.ready
+    || !preview.fit
+    || Number(preview.pieceId) !== Number(nextPiece.id)
+    || Number(preview.delta) !== Number(delta)) {
+    animateFullDrawingTransition(nextPiece, delta).catch((err) => toast(err.message, { type: 'danger' }));
+    return;
+  }
+
+  const token = ++drawingTransition.token;
+  drawingTransition.active = true;
+  updateDrawingNav();
+  const duration = drawingMotionMs(220);
+  const currentTarget = `translate(${zoomState.tx - delta * (viewer.clientWidth + 32)}px, ${zoomState.ty}px) scale(${zoomState.scale})`;
+  setDrawingImgTransition(true, duration);
+  setLayerTransition(preview.img, true, duration);
+  requestAnimationFrame(() => {
+    img.style.transform = currentTarget;
+    img.style.opacity = '.88';
+    preview.img.style.transform = `translate(${preview.fit.tx}px, ${preview.fit.ty}px) scale(${preview.fit.scale})`;
+    preview.img.style.opacity = '1';
+  });
+
+  await new Promise((resolve) => window.setTimeout(resolve, duration + 40));
+  if (token !== drawingTransition.token) return;
+  currentPiece = nextPiece;
+  setCurrentDrawingMeta();
+  img.src = preview.img.src;
+  zoomState.fitScale = preview.fit.scale;
+  zoomState.scale = preview.fit.scale;
+  zoomState.minScale = preview.fit.scale * 0.5;
+  zoomState.maxScale = preview.fit.scale * 10;
+  zoomState.tx = preview.fit.tx;
+  zoomState.ty = preview.fit.ty;
+  drawingTransition.active = false;
+  drawingTransition.offset = 0;
+  setDrawingImgTransition(false);
+  img.classList.remove('drawing-dragging');
+  img.style.opacity = '1';
+  img.style.zIndex = '2';
+  removeDrawingPreview();
+  applyTransform();
+  updateDrawingNav();
 }
 
 let zoomState = { scale: 1, tx: 0, ty: 0, minScale: 0.1, maxScale: 8, fitScale: 1 };
 function applyTransform() {
   const img = document.getElementById('fullDrawing');
-  img.style.transform = `translate(${zoomState.tx}px, ${zoomState.ty}px) scale(${zoomState.scale})`;
+  img.style.transform = `translate(${zoomState.tx + (drawingTransition.offset || 0)}px, ${zoomState.ty}px) scale(${zoomState.scale})`;
   document.getElementById('zoomLabel').textContent = Math.round(zoomState.scale * 100 / zoomState.fitScale) + '%';
 }
-function fitImageToViewer() {
+function fitImageToViewer(options = {}) {
   const img = document.getElementById('fullDrawing');
   const viewer = document.getElementById('viewer');
   if (!img.naturalWidth || !viewer) return;
-  const scale = Math.min(viewer.clientWidth / img.naturalWidth, viewer.clientHeight / img.naturalHeight);
-  zoomState.fitScale = scale;
-  zoomState.scale = scale;
-  zoomState.minScale = scale * 0.5;
-  zoomState.maxScale = scale * 10;
-  zoomState.tx = (viewer.clientWidth - img.naturalWidth * scale) / 2;
-  zoomState.ty = (viewer.clientHeight - img.naturalHeight * scale) / 2;
+  const fit = fitGeometryForImage(img);
+  if (!fit) return;
+  zoomState.fitScale = fit.scale;
+  zoomState.scale = fit.scale;
+  zoomState.minScale = fit.scale * 0.5;
+  zoomState.maxScale = fit.scale * 10;
+  zoomState.tx = fit.tx;
+  zoomState.ty = fit.ty;
+  drawingTransition.offset = Number(options.offset || 0);
   applyTransform();
+  warmAdjacentDrawingImages();
 }
 function zoomBy(factor, cx, cy) {
   const viewer = document.getElementById('viewer');
@@ -534,6 +914,8 @@ function zoomReset() { fitImageToViewer(); }
   let pinchStart = null;
   let panLast = null;
   let lastTapAt = 0;
+  let swipeStart = null;
+  let swipeLast = null;
 
   function rel(e) {
     const r = viewer.getBoundingClientRect();
@@ -549,6 +931,7 @@ function zoomReset() { fitImageToViewer(); }
   }
 
   viewer.addEventListener('pointerdown', (e) => {
+    if (drawingTransition.active) return;
     viewer.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, rel(e));
     if (pointers.size === 1) {
@@ -560,10 +943,15 @@ function zoomReset() { fitImageToViewer(); }
         lastTapAt = now;
       }
       panLast = rel(e);
+      swipeStart = panLast;
+      swipeLast = panLast;
+      setDrawingImgTransition(false);
       viewer.style.cursor = 'grabbing';
     } else if (pointers.size === 2) {
       pinchStart = { dist: pinchDist(), scale: zoomState.scale, center: pinchCenter() };
       panLast = null;
+      swipeStart = null;
+      swipeLast = null;
     }
   });
 
@@ -571,6 +959,8 @@ function zoomReset() { fitImageToViewer(); }
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, rel(e));
     if (pointers.size === 2 && pinchStart) {
+      drawingTransition.offset = 0;
+      removeDrawingPreview();
       const d = pinchDist();
       if (d > 0 && pinchStart.dist > 0) {
         const targetScale = Math.max(zoomState.minScale, Math.min(zoomState.maxScale,
@@ -584,26 +974,102 @@ function zoomReset() { fitImageToViewer(); }
       }
     } else if (pointers.size === 1 && panLast) {
       const p = rel(e);
-      zoomState.tx += p.x - panLast.x;
-      zoomState.ty += p.y - panLast.y;
+      swipeLast = p;
+      const dxTotal = swipeStart ? p.x - swipeStart.x : 0;
+      const dyTotal = swipeStart ? p.y - swipeStart.y : 0;
+      if (drawingAtFit()) {
+        if (Math.abs(dxTotal) > 8 && Math.abs(dxTotal) > Math.abs(dyTotal) * 1.15) {
+          const delta = dxTotal < 0 ? 1 : -1;
+          const canNavigate = Boolean(drawingPieceAtDelta(delta));
+          drawingTransition.offset = dxTotal * (canNavigate ? 1 : 0.28);
+          document.getElementById('fullDrawing')?.classList.add('drawing-dragging');
+          if (canNavigate) ensureDrawingPreview(delta);
+          else removeDrawingPreview();
+        } else {
+          drawingTransition.offset = 0;
+          document.getElementById('fullDrawing')?.classList.remove('drawing-dragging');
+          removeDrawingPreview();
+        }
+      } else {
+        drawingTransition.offset = 0;
+        document.getElementById('fullDrawing')?.classList.remove('drawing-dragging');
+        removeDrawingPreview();
+        zoomState.tx += p.x - panLast.x;
+        zoomState.ty += p.y - panLast.y;
+      }
       panLast = p;
       applyTransform();
+      positionDrawingPreview(drawingTransition.offset, false);
     }
   });
 
   function endPointer(e) {
+    let maybeSwipe = null;
+    if (pointers.has(e.pointerId) && swipeStart) {
+      swipeLast = rel(e);
+    }
+    if (pointers.size === 1 && pointers.has(e.pointerId) && swipeStart && swipeLast) {
+      const dx = swipeLast.x - swipeStart.x;
+      const dy = swipeLast.y - swipeStart.y;
+      if (drawingAtFit() && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) {
+        maybeSwipe = dx < 0 ? 1 : -1;
+      }
+    }
     if (pointers.has(e.pointerId)) pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchStart = null;
     if (pointers.size === 0) {
       panLast = null;
+      swipeStart = null;
+      swipeLast = null;
       viewer.style.cursor = 'grab';
     } else if (pointers.size === 1) {
       panLast = [...pointers.values()][0];
+      swipeStart = panLast;
+      swipeLast = panLast;
+    }
+    if (maybeSwipe && drawingPieceAtDelta(maybeSwipe)) {
+      finishDrawingSwipe(maybeSwipe).catch((err) => toast(err.message, { type: 'danger' }));
+    } else {
+      snapDrawingOffset();
     }
   }
+
+  function finishTouchFallback(point) {
+    window.setTimeout(() => {
+      if (drawingTransition.active || Math.abs(drawingTransition.offset || 0) < 0.5) return;
+      if (point && swipeStart) swipeLast = point;
+      let maybeSwipe = null;
+      if (swipeStart && swipeLast) {
+        const dx = swipeLast.x - swipeStart.x;
+        const dy = swipeLast.y - swipeStart.y;
+        if (drawingAtFit() && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) {
+          maybeSwipe = dx < 0 ? 1 : -1;
+        }
+      }
+      pointers.clear();
+      pinchStart = null;
+      panLast = null;
+      swipeStart = null;
+      swipeLast = null;
+      viewer.style.cursor = 'grab';
+      if (maybeSwipe && drawingPieceAtDelta(maybeSwipe)) {
+        finishDrawingSwipe(maybeSwipe).catch((err) => toast(err.message, { type: 'danger' }));
+      } else {
+        snapDrawingOffset();
+      }
+    }, 0);
+  }
+
   viewer.addEventListener('pointerup', endPointer);
   viewer.addEventListener('pointercancel', endPointer);
   viewer.addEventListener('pointerleave', endPointer);
+  viewer.addEventListener('touchend', (e) => {
+    const touch = e.changedTouches && e.changedTouches[0] ? rel(e.changedTouches[0]) : null;
+    finishTouchFallback(touch);
+  }, { passive: true });
+  viewer.addEventListener('touchcancel', () => {
+    finishTouchFallback(null);
+  }, { passive: true });
 
   viewer.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -627,7 +1093,7 @@ function closeModal() {
 
 function askBroken() {
   closeModal();
-  document.getElementById('brokenDesc').textContent = `#${order.order_number} ${tn('pieceN', { n: currentPiece.piece_no })}`;
+  document.getElementById('brokenDesc').textContent = `${orderCodeText(order)} ${tn('pieceN', { n: currentPiece.piece_no })}`;
   document.getElementById('brokenNote').value = '';
   document.getElementById('brokenModal').classList.add('open');
 }

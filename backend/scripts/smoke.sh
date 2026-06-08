@@ -4,6 +4,19 @@ set -euo pipefail
 BASE="${BASE:-http://localhost:8781}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PDF="$ROOT/Glass Order - 2605011 Inspire --8 Heritage Cove.pdf"
+BACKEND_DIR="$ROOT/backend"
+ENV_PATH="${ENV_FILE:-$BACKEND_DIR/.env}"
+case "$ENV_PATH" in
+  /*) ;;
+  *) ENV_PATH="$ROOT/$ENV_PATH" ;;
+esac
+UPLOADS_REL="$(awk -F= '/^UPLOADS_DIR=/ {print $2; exit}' "$ENV_PATH" 2>/dev/null | tr -d '[:space:]')"
+[ -n "$UPLOADS_REL" ] || UPLOADS_REL="./uploads"
+case "$UPLOADS_REL" in
+  /*) UPLOADS_DIR="$UPLOADS_REL" ;;
+  *) UPLOADS_DIR="$BACKEND_DIR/${UPLOADS_REL#./}" ;;
+esac
+PDF_UPLOAD_DIR="$UPLOADS_DIR/pdfs"
 
 json_field() {
   node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>console.log(JSON.parse(s)$1))"
@@ -12,6 +25,20 @@ json_field() {
 json_true() {
   local expr="$1"
   node -e "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const data=JSON.parse(s);process.exit(($expr)?0:1)})"
+}
+
+urlencode() {
+  node -e "console.log(encodeURIComponent(process.argv[1]))" "$1"
+}
+
+safe_upload_name() {
+  node -e "console.log(process.argv[1].replace(/[^a-zA-Z0-9._-]/g, '-'))" "$1"
+}
+
+uploaded_name_count() {
+  local name
+  name="$(safe_upload_name "$1")"
+  find "$PDF_UPLOAD_DIR" -maxdepth 1 -type f -name "*$name" 2>/dev/null | wc -l | tr -d '[:space:]'
 }
 
 status() {
@@ -27,9 +54,11 @@ status() {
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+STAMP="$(date +%s%N)-$RANDOM"
 TEST_PDF="$tmp/order.pdf"
+PO_FILENAME="Glass Order - 260620 Smoke QA PO SMOKE-$STAMP.pdf"
 cp "$PDF" "$TEST_PDF"
-printf '\n%% smoke %s %s\n' "$(date +%s)" "$RANDOM" >> "$TEST_PDF"
+printf '\n%% smoke %s\n' "$STAMP" >> "$TEST_PDF"
 
 code=$(curl -s -o "$tmp/health.json" -w '%{http_code}' "$BASE/api/health")
 status "$code" 200 "health"
@@ -63,7 +92,8 @@ code=$(curl -s -o "$tmp/xss-customer.json" -w '%{http_code}' \
 status "$code" 201 "xss customer create"
 
 # --- Q2 invalid customer_id should 400 and clean up --------------------------
-BAD_CUSTOMER_PDF="bad-customer-$RANDOM-$(date +%s%N).pdf"
+BAD_CUSTOMER_PDF="Glass Order - 260620 Smoke Bad Customer PO SMOKE-BAD-$STAMP.pdf"
+PDF_COUNT_BEFORE="$(uploaded_name_count "$BAD_CUSTOMER_PDF")"
 code=$(curl -s -o "$tmp/order-bad-cust.json" -w '%{http_code}' \
   "${AUTH[@]}" \
   -F "customer_id=99999" \
@@ -71,8 +101,9 @@ code=$(curl -s -o "$tmp/order-bad-cust.json" -w '%{http_code}' \
   -F "pdf=@$TEST_PDF;filename=$BAD_CUSTOMER_PDF;type=application/pdf" \
   "$BASE/api/orders")
 status "$code" 400 "order invalid customer_id"
-if find "$(dirname "$0")/../uploads/pdfs" -maxdepth 1 -type f -name "*$BAD_CUSTOMER_PDF" | grep -q .; then
-  echo "FAIL pdf residue after invalid customer filename: $BAD_CUSTOMER_PDF" >&2
+PDF_COUNT_AFTER="$(uploaded_name_count "$BAD_CUSTOMER_PDF")"
+if [ "$PDF_COUNT_AFTER" != "$PDF_COUNT_BEFORE" ]; then
+  echo "FAIL pdf residue after invalid customer: before=$PDF_COUNT_BEFORE after=$PDF_COUNT_AFTER" >&2
   exit 1
 fi
 echo "OK invalid customer cleanup ($BAD_CUSTOMER_PDF)"
@@ -94,31 +125,58 @@ code=$(curl -s -o "$tmp/order.json" -w '%{http_code}' \
   -F "priority=rush" \
   -F "deadline=2026-05-18" \
   -F "note=smoke" \
-  -F "pdf=@$TEST_PDF;type=application/pdf" \
+  -F "pdf=@$TEST_PDF;filename=$PO_FILENAME;type=application/pdf" \
   "$BASE/api/orders")
 status "$code" 201 "order create"
 OID="$(json_field '.order.id' < "$tmp/order.json")"
 ORDER_NUM="$(json_field '.order.order_number' < "$tmp/order.json")"
 COUNT="$(json_field '.pieces.length' < "$tmp/order.json")"
 PIECE4="$(json_field '.pieces[3].size' < "$tmp/order.json")"
+[ "$ORDER_NUM" = "PO SMOKE-$STAMP" ] || { echo "FAIL order PO: $ORDER_NUM" >&2; exit 1; }
+ORDER_NUM_ENC="$(urlencode "$ORDER_NUM")"
 [ "$COUNT" = "8" ] || { echo "FAIL parsed pieces: $COUNT" >&2; exit 1; }
 [ "$PIECE4" = '30" × 75-1/4"' ] || { echo "FAIL piece4 size: $PIECE4" >&2; exit 1; }
-echo "OK pdf parsed: 8 pieces, piece4=$PIECE4"
+echo "OK pdf parsed: $ORDER_NUM, 8 pieces, piece4=$PIECE4"
 
-# --- P3-T1 same source PDF must not be uploaded twice -----------------------
-DUP_PDF="duplicate-$RANDOM-$(date +%s%N).pdf"
+# --- P39 same PO must not be uploaded twice, even with different PDF content -
+DUP_PO_PDF="$tmp/order-duplicate-po.pdf"
+cp "$TEST_PDF" "$DUP_PO_PDF"
+printf '\n%% duplicate po different content %s\n' "$RANDOM" >> "$DUP_PO_PDF"
+PDF_COUNT_BEFORE="$(uploaded_name_count "$PO_FILENAME")"
 code=$(curl -s -o "$tmp/order-dup.json" -w '%{http_code}' \
   "${AUTH[@]}" \
   -F "customer_id=$CID" \
   -F "priority=normal" \
-  -F "pdf=@$TEST_PDF;filename=$DUP_PDF;type=application/pdf" \
+  -F "pdf=@$DUP_PO_PDF;filename=$PO_FILENAME;type=application/pdf" \
   "$BASE/api/orders")
-status "$code" 409 "duplicate pdf rejected"
-if find "$(dirname "$0")/../uploads/pdfs" -maxdepth 1 -type f -name "*$DUP_PDF" | grep -q .; then
-  echo "FAIL pdf residue after duplicate filename: $DUP_PDF" >&2
+status "$code" 409 "duplicate PO rejected"
+json_true 'data.code === "DUPLICATE_PO"' < "$tmp/order-dup.json" || {
+  echo "FAIL duplicate PO response missing code" >&2
+  exit 1
+}
+PDF_COUNT_AFTER="$(uploaded_name_count "$PO_FILENAME")"
+if [ "$PDF_COUNT_AFTER" != "$PDF_COUNT_BEFORE" ]; then
+  echo "FAIL pdf residue after duplicate PO: before=$PDF_COUNT_BEFORE after=$PDF_COUNT_AFTER" >&2
   exit 1
 fi
-echo "OK duplicate pdf cleanup ($DUP_PDF)"
+echo "OK duplicate PO cleanup ($PO_FILENAME)"
+
+# --- P3-T1 same source PDF under a different PO must still be rejected -------
+DUP_HASH_PDF="Glass Order - 260620 Smoke Duplicate Hash PO SMOKE-HASH-$STAMP.pdf"
+PDF_COUNT_BEFORE="$(uploaded_name_count "$DUP_HASH_PDF")"
+code=$(curl -s -o "$tmp/order-dup-hash.json" -w '%{http_code}' \
+  "${AUTH[@]}" \
+  -F "customer_id=$CID" \
+  -F "priority=normal" \
+  -F "pdf=@$TEST_PDF;filename=$DUP_HASH_PDF;type=application/pdf" \
+  "$BASE/api/orders")
+status "$code" 409 "duplicate source pdf rejected"
+PDF_COUNT_AFTER="$(uploaded_name_count "$DUP_HASH_PDF")"
+if [ "$PDF_COUNT_AFTER" != "$PDF_COUNT_BEFORE" ]; then
+  echo "FAIL pdf residue after duplicate hash: before=$PDF_COUNT_BEFORE after=$PDF_COUNT_AFTER" >&2
+  exit 1
+fi
+echo "OK duplicate source pdf cleanup ($DUP_HASH_PDF)"
 
 code=$(curl -s -o "$tmp/detail.json" -w '%{http_code}' "${AUTH[@]}" "$BASE/api/orders/$OID")
 status "$code" 200 "order detail"
@@ -126,24 +184,26 @@ P1="$(json_field '.order.pieces[0].id' < "$tmp/detail.json")"
 P2="$(json_field '.order.pieces[1].id' < "$tmp/detail.json")"
 P3="$(json_field '.order.pieces[2].id' < "$tmp/detail.json")"
 
-# --- P3-T2 process config can skip tempered: cut -> edge -> finished --------
+# --- P3-T2 process config can skip tempered: cut -> edge -> polish -> finished
 code=$(curl -s -o "$tmp/p3-config.json" -w '%{http_code}' -X PATCH \
   "${AUTH[@]}" -H 'Content-Type: application/json' \
-  -d '{"required_steps":["cut","edge"]}' \
+  -d '{"required_steps":["cut","edge","polish"]}' \
   "$BASE/api/pieces/$P3/process-config")
 status "$code" 200 "piece process config"
-for n in 1 2; do
+for n in 1 2 3; do
   code=$(curl -s -o "$tmp/p3-$n.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P3/advance")
   status "$code" 200 "piece skip-tempered advance $n"
 done
-P3_STAGE="$(json_field '.piece.stage' < "$tmp/p3-2.json")"
+P3_STAGE="$(json_field '.piece.stage' < "$tmp/p3-3.json")"
 [ "$P3_STAGE" = "finished" ] || { echo "FAIL skip-tempered stage: $P3_STAGE" >&2; exit 1; }
 
-for n in 1 2 3; do
+for n in 1 2 3 4; do
   code=$(curl -s -o "$tmp/p1-$n.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P1/advance")
   status "$code" 200 "piece1 advance $n"
 done
-P1_STAGE="$(json_field '.piece.stage' < "$tmp/p1-3.json")"
+P1_POLISH_STAGE="$(json_field '.piece.stage' < "$tmp/p1-3.json")"
+[ "$P1_POLISH_STAGE" = "polish" ] || { echo "FAIL piece1 should be polish after 3 advances: $P1_POLISH_STAGE" >&2; exit 1; }
+P1_STAGE="$(json_field '.piece.stage' < "$tmp/p1-4.json")"
 [ "$P1_STAGE" = "finished" ] || { echo "FAIL piece1 stage: $P1_STAGE" >&2; exit 1; }
 
 code=$(curl -s -o "$tmp/p2-broken.json" -w '%{http_code}' -X POST \
@@ -255,7 +315,7 @@ code=$(curl -s -o "$tmp/archive-repeat.json" -w '%{http_code}' -X POST "${AUTH[@
 status "$code" 400 "archive repeat rejected"
 
 code=$(curl -s -o "$tmp/order-by-number-active.json" -w '%{http_code}' \
-  "${AUTH[@]}" "$BASE/api/orders?order_number=$ORDER_NUM")
+  "${AUTH[@]}" "$BASE/api/orders?order_number=$ORDER_NUM_ENC")
 status "$code" 200 "order number lookup active list"
 OID="$OID" json_true '!data.orders.some(o => Number(o.id) === Number(process.env.OID))' < "$tmp/order-by-number-active.json" || {
   echo "FAIL archived order leaked into default order_number lookup" >&2
@@ -263,7 +323,7 @@ OID="$OID" json_true '!data.orders.some(o => Number(o.id) === Number(process.env
 }
 
 code=$(curl -s -o "$tmp/order-by-number-archive.json" -w '%{http_code}' \
-  "${AUTH[@]}" "$BASE/api/orders?archived=1&order_number=$ORDER_NUM")
+  "${AUTH[@]}" "$BASE/api/orders?archived=1&order_number=$ORDER_NUM_ENC")
 status "$code" 200 "order number lookup archive list"
 OID="$OID" json_true 'data.orders.length === 1 && Number(data.orders[0].id) === Number(process.env.OID) && !!data.orders[0].archived_at' < "$tmp/order-by-number-archive.json" || {
   echo "FAIL archived order not found by order_number" >&2
@@ -271,7 +331,7 @@ OID="$OID" json_true 'data.orders.length === 1 && Number(data.orders[0].id) === 
 }
 
 code=$(curl -s -o "$tmp/order-search-archive.json" -w '%{http_code}' \
-  "${AUTH[@]}" "$BASE/api/orders?archived=1&search=$ORDER_NUM")
+  "${AUTH[@]}" "$BASE/api/orders?archived=1&search=$ORDER_NUM_ENC")
 status "$code" 200 "archived order search by number"
 OID="$OID" json_true 'data.orders.some(o => Number(o.id) === Number(process.env.OID))' < "$tmp/order-search-archive.json" || {
   echo "FAIL archived order not found by search" >&2

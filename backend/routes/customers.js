@@ -33,11 +33,30 @@ function validateEmail(email) {
   return v;
 }
 
+function validateEmailList(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const parts = raw.split(/[;,，；]+/).map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return null;
+
+  const seen = new Set();
+  const normalized = [];
+  for (const email of parts) {
+    if (!EMAIL_RE.test(email)) return { error: 'email_cc is invalid' };
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(key);
+  }
+  return normalized.join(', ');
+}
+
 router.get('/', requireRole('boss'), (req, res) => {
   const search = String(req.query.search || '').trim();
   const params = {};
   const where = search
-    ? `WHERE c.company LIKE @like OR c.contact_name LIKE @like OR c.phone LIKE @like OR c.email LIKE @like`
+    ? `WHERE c.company LIKE @like OR c.contact_name LIKE @like OR c.phone LIKE @like OR c.email LIKE @like OR c.email_cc LIKE @like`
     : '';
   if (search) params.like = `%${search}%`;
   const rows = db.prepare(`
@@ -84,6 +103,7 @@ router.get('/', requireRole('boss'), (req, res) => {
       c.contact_name,
       c.phone,
       c.email,
+      c.email_cc,
       c.notes,
       c.created_at,
       COALESCE(os.order_count, 0) AS order_count,
@@ -115,20 +135,23 @@ router.post('/', requireRole('boss'), (req, res) => {
   if (!company) return res.status(400).json({ error: 'company is required' });
   const emailCheck = validateEmail(req.body.email);
   if (emailCheck && emailCheck.error) return res.status(400).json({ error: emailCheck.error });
+  const emailCcCheck = validateEmailList(req.body.email_cc);
+  if (emailCcCheck && emailCcCheck.error) return res.status(400).json({ error: emailCcCheck.error });
 
   const info = db.prepare(`
-    INSERT INTO customers (company, contact_name, phone, email, notes)
-    VALUES (@company, @contact_name, @phone, @email, @notes)
+    INSERT INTO customers (company, contact_name, phone, email, email_cc, notes)
+    VALUES (@company, @contact_name, @phone, @email, @email_cc, @notes)
   `).run({
     company,
     contact_name: req.body.contact_name || null,
     phone: req.body.phone || null,
     email: emailCheck || null,
+    email_cc: emailCcCheck || null,
     notes: req.body.notes || null,
   });
 
   const customer = db.prepare(`
-    SELECT id, company, contact_name, phone, email, notes, created_at
+    SELECT id, company, contact_name, phone, email, email_cc, notes, created_at
     FROM customers WHERE id = ?
   `).get(info.lastInsertRowid);
   res.status(201).json({ customer });
@@ -142,6 +165,8 @@ router.put('/:id', requireRole('boss'), (req, res) => {
   if (!company) return res.status(400).json({ error: 'company is required' });
   const emailCheck = validateEmail(req.body.email);
   if (emailCheck && emailCheck.error) return res.status(400).json({ error: emailCheck.error });
+  const emailCcCheck = validateEmailList(req.body.email_cc);
+  if (emailCcCheck && emailCcCheck.error) return res.status(400).json({ error: emailCcCheck.error });
 
   db.prepare(`
     UPDATE customers
@@ -149,6 +174,7 @@ router.put('/:id', requireRole('boss'), (req, res) => {
         contact_name = @contact_name,
         phone = @phone,
         email = @email,
+        email_cc = @email_cc,
         notes = @notes
     WHERE id = @id
   `).run({
@@ -157,11 +183,12 @@ router.put('/:id', requireRole('boss'), (req, res) => {
     contact_name: req.body.contact_name || null,
     phone: req.body.phone || null,
     email: emailCheck || null,
+    email_cc: emailCcCheck || null,
     notes: req.body.notes || null,
   });
 
   const customer = db.prepare(`
-    SELECT id, company, contact_name, phone, email, notes, created_at
+    SELECT id, company, contact_name, phone, email, email_cc, notes, created_at
     FROM customers WHERE id = ?
   `).get(req.params.id);
   res.json({ customer });
@@ -189,7 +216,7 @@ router.delete('/:id', requireRole('boss'), (req, res) => {
 
 router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
   const customer = db.prepare(`
-    SELECT id, company, email FROM customers WHERE id = ?
+    SELECT id, company, email, email_cc FROM customers WHERE id = ?
   `).get(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
   if (!customer.email) return res.status(400).json({ error: 'Customer email is missing' });
@@ -201,6 +228,7 @@ router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
       c.contact_name,
       c.phone AS customer_phone,
       c.email AS customer_email,
+      c.email_cc AS customer_email_cc,
       p.slip_pdf_path,
       p.id AS pickup_id
     FROM pickups p
@@ -215,12 +243,13 @@ router.post('/:id/send-slip', requireRole('boss'), (req, res) => {
   const slipPath = path.join(uploadsBase, row.slip_pdf_path.replace(/^\/uploads\//, ''));
   if (!fs.existsSync(slipPath)) return res.status(400).json({ error: 'Pickup slip file is missing' });
 
-  const mail = sendPickupEmail({ order: row, slipPath, to: customer.email });
+  const mail = sendPickupEmail({ order: row, slipPath, to: customer.email, cc: customer.email_cc });
   db.prepare(`
     INSERT INTO events (order_id, piece_id, actor_id, action, details)
     VALUES (?, NULL, ?, 'pickup_slip_sent', ?)
   `).run(row.id, req.user.id, JSON.stringify({
     to: customer.email,
+    cc: customer.email_cc || null,
     customer_id: customer.id,
     skipped: Boolean(mail.skipped),
     reason: mail.reason || null,

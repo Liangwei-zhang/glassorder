@@ -31,16 +31,20 @@ CID="$(json_field '.customer.id' < "$tmp/customer.json")"
 ok=0
 dup=0
 fail=0
+seq=0
+stamp="$(date +%s%N)-$RANDOM"
 seen_hashes="$tmp/seen_hashes"
 : > "$seen_hashes"
 
 while IFS= read -r -d '' pdf; do
+  seq=$((seq + 1))
   hash="$(sha256sum "$pdf" | awk '{print $1}')"
+  upload_name="Glass Order - 260621 ZIP Smoke PO ZIP-$stamp-$(printf '%03d' "$seq").pdf"
   code=$(curl -s -o "$tmp/upload.json" -w '%{http_code}' \
     "${AUTH[@]}" \
     -F "customer_id=$CID" \
     -F "priority=normal" \
-    -F "pdf=@$pdf;type=application/pdf" \
+    -F "pdf=@$pdf;filename=$upload_name;type=application/pdf" \
     "$BASE/api/orders")
   if grep -qx "$hash" "$seen_hashes"; then
     if [ "$code" = "409" ]; then

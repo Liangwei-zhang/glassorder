@@ -51,7 +51,7 @@ async function createQaOrder(session) {
     fs.readFileSync(SAMPLE_PDF),
     Buffer.from(`\n% browser qa ${stamp}\n`),
   ]);
-  const file = new File([pdf], `browser-qa-${stamp}.pdf`, { type: 'application/pdf' });
+  const file = new File([pdf], `Glass Order - 260601 Browser QA PO BROWSER-${stamp}.pdf`, { type: 'application/pdf' });
   const form = new FormData();
   form.set('customer_id', String(customer.customer.id));
   form.set('priority', 'normal');
@@ -391,16 +391,9 @@ async function main() {
 
       // Q8 piece-level pickup state: selected customer still has the unpicked pieces available.
       await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
-      await page.fill('#customerPicker input[type="search"]', `Browser QA`);
+      await page.fill('#customerPicker input[type="search"]', seeded.company);
       await page.locator(`.customer-picker-option[data-id="${seeded.customerId}"]`).click();
       await page.waitForSelector('#available [data-piece]');
-      const remainingPieces = await page.locator('#available [data-piece]').count();
-      if (remainingPieces !== 6) {
-        throw new Error(`Q8 expected 6 remaining pickup pieces after partial pickup, got ${remainingPieces}`);
-      }
-      checks.push('Q8 partial pickup remainder');
-
-      // Finish remaining pieces so the active orders page can expose it under the picked-up filter.
       const remainingAvailable = await api(`/api/pickups/available?customer_id=${seeded.customerId}`, { headers: authHeaders(session) });
       const remainingPieceIds = (remainingAvailable.pieces || [])
         .filter((item) => Number(item.order_id) === Number(seeded.orderId))
@@ -408,6 +401,15 @@ async function main() {
       if (remainingPieceIds.length !== 6) {
         throw new Error(`expected 6 remaining pieces before final pickup, got ${remainingPieceIds.length}`);
       }
+      const visibleRemainingPieces = await page.locator('#available [data-piece]').evaluateAll((inputs, ids) => (
+        inputs.filter((input) => ids.includes(Number(input.dataset.piece))).length
+      ), remainingPieceIds);
+      if (visibleRemainingPieces !== 6) {
+        throw new Error(`Q8 expected 6 visible remaining pickup pieces, got ${visibleRemainingPieces}`);
+      }
+      checks.push('Q8 partial pickup remainder');
+
+      // Finish remaining pieces so the active orders page can expose it under the picked-up filter.
       const finalPickup = await api('/api/pickups/batches', {
         method: 'POST',
         headers: { ...authHeaders(session), 'Content-Type': 'application/json' },

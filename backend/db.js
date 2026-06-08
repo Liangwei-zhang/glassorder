@@ -1,6 +1,7 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
+const { poCodeKey } = require('./services/poCode');
 
 const dbPath = process.env.DB_PATH || path.join(__dirname, 'glass.db');
 const uploadsBase = process.env.UPLOADS_DIR
@@ -19,6 +20,64 @@ function indexExists(name) {
   return Boolean(db.prepare(`
     SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?
   `).get(name));
+}
+
+function tableSql(name) {
+  const row = db.prepare(`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?
+  `).get(name);
+  return row ? String(row.sql || '') : '';
+}
+
+function recreatePiecesTableWithPolishStage() {
+  const sql = tableSql('pieces');
+  if (!sql || sql.includes("'polish'")) return;
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    CREATE TABLE pieces_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      piece_no INTEGER NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'cut' CHECK (stage IN ('cut', 'edge', 'tempered', 'polish', 'finished')),
+      hold INTEGER NOT NULL DEFAULT 0,
+      rework INTEGER NOT NULL DEFAULT 0,
+      broken INTEGER NOT NULL DEFAULT 0,
+      size TEXT,
+      type TEXT,
+      thickness TEXT,
+      weight TEXT,
+      piece_note TEXT,
+      drawing_path TEXT,
+      process_config TEXT,
+      completed_steps TEXT,
+      picked_up_at TEXT,
+      pickup_batch_id INTEGER,
+      UNIQUE(order_id, piece_no)
+    );
+
+    INSERT INTO pieces_new (
+      id, order_id, piece_no, stage, hold, rework, broken,
+      size, type, thickness, weight, piece_note, drawing_path,
+      process_config, completed_steps, picked_up_at, pickup_batch_id
+    )
+    SELECT
+      id, order_id, piece_no, stage, hold, rework, broken,
+      size, type, thickness, weight, piece_note, drawing_path,
+      process_config, completed_steps, picked_up_at, pickup_batch_id
+    FROM pieces;
+
+    DROP TABLE pieces;
+    ALTER TABLE pieces_new RENAME TO pieces;
+
+    CREATE INDEX IF NOT EXISTS idx_pieces_order ON pieces(order_id);
+    CREATE INDEX IF NOT EXISTS idx_pieces_stage ON pieces(stage);
+    CREATE INDEX IF NOT EXISTS idx_pieces_pickup_batch ON pieces(pickup_batch_id);
+    CREATE INDEX IF NOT EXISTS idx_pieces_picked_up_at ON pieces(picked_up_at);
+
+    PRAGMA foreign_keys = ON;
+  `);
 }
 
 function migrateDb() {
@@ -137,6 +196,44 @@ function migrateDb() {
         `);
       },
     },
+    {
+      name: 'phase14_polish_stage',
+      run() {
+        recreatePiecesTableWithPolishStage();
+      },
+    },
+    {
+      name: 'phase14_customer_email_cc',
+      run() {
+        if (!columnExists('customers', 'email_cc')) {
+          db.exec('ALTER TABLE customers ADD COLUMN email_cc TEXT');
+        }
+      },
+    },
+    {
+      name: 'phase39_order_number_po_key',
+      run() {
+        if (!columnExists('orders', 'order_number_key')) {
+          db.exec('ALTER TABLE orders ADD COLUMN order_number_key TEXT');
+        }
+        const rows = db.prepare('SELECT id, order_number FROM orders ORDER BY id').all();
+        const seen = new Set();
+        const update = db.prepare('UPDATE orders SET order_number_key = ? WHERE id = ?');
+        for (const row of rows) {
+          const baseKey = poCodeKey(row.order_number) || `order${row.id}`;
+          const key = seen.has(baseKey) ? `${baseKey}${row.id}` : baseKey;
+          seen.add(key);
+          update.run(key, row.id);
+        }
+        if (!indexExists('idx_orders_order_number_key_unique')) {
+          db.exec(`
+            CREATE UNIQUE INDEX idx_orders_order_number_key_unique
+            ON orders(order_number_key)
+            WHERE order_number_key IS NOT NULL AND order_number_key <> ''
+          `);
+        }
+      },
+    },
   ];
 
   const applied = db.prepare('SELECT name FROM schema_migrations').all()
@@ -176,6 +273,7 @@ function initDb() {
       contact_name TEXT,
       phone TEXT,
       email TEXT,
+      email_cc TEXT,
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -183,6 +281,7 @@ function initDb() {
     CREATE TABLE IF NOT EXISTS orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_number TEXT NOT NULL UNIQUE,
+      order_number_key TEXT,
       customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
       project_name TEXT,
       priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'rush', 'rework')),
@@ -202,7 +301,7 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
       piece_no INTEGER NOT NULL,
-      stage TEXT NOT NULL DEFAULT 'cut' CHECK (stage IN ('cut', 'edge', 'tempered', 'finished')),
+      stage TEXT NOT NULL DEFAULT 'cut' CHECK (stage IN ('cut', 'edge', 'tempered', 'polish', 'finished')),
       hold INTEGER NOT NULL DEFAULT 0,
       rework INTEGER NOT NULL DEFAULT 0,
       broken INTEGER NOT NULL DEFAULT 0,

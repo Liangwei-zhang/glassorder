@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Orders</title>
-<link rel="stylesheet" href="shared.css?v=20260522-optional-signature">
+<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
 </head>
 <body>
 
@@ -41,7 +41,7 @@
     <button class="btn filter-btn" id="moreFilterBtn" type="button" data-i18n="filterMore">筛选</button>
   </div>
 
-  <input class="form-input search-block" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="搜索订单号 / 公司名">
+  <input class="form-input search-block" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="搜索 PO / 公司名">
   <div id="list" class="card order-list-panel"></div>
 </div>
 
@@ -71,8 +71,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260522-optional-signature"></script>
-<script src="js/i18n.js?v=20260522-optional-signature"></script>
+<script src="js/api.js?v=20260608-po-order-number"></script>
+<script src="js/i18n.js?v=20260608-po-order-number"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 const archiveMode = new URLSearchParams(location.search).get('archived') === '1';
@@ -159,7 +159,7 @@ function renderAlerts() {
     tone: 'warn',
     count: overdueCount,
     title: tn('overdueAlertN', { n: overdueCount }),
-    sub: overdueOrders.length ? overdueOrders.map(o => '#' + o.order_number).join(', ') : t('dashboardCheckOverdue'),
+    sub: overdueOrders.length ? overdueOrders.map(orderCodeText).join(', ') : t('dashboardCheckOverdue'),
     filter: 'overdue',
   });
   if (pickupCount > 0) tasks.push({
@@ -355,6 +355,7 @@ async function openDashboardEdit(orderId) {
         <label><input type="checkbox" data-step="cut" ${pieceStepChecked(p, 'cut')}> ${esc(stageLabel('cut'))}</label>
         <label><input type="checkbox" data-step="edge" ${pieceStepChecked(p, 'edge')}> ${esc(stageLabel('edge'))}</label>
         <label><input type="checkbox" data-step="tempered" ${pieceStepChecked(p, 'tempered')}> ${esc(stageLabel('tempered'))}</label>
+        <label><input type="checkbox" data-step="polish" ${pieceStepChecked(p, 'polish')}> ${esc(stageLabel('polish'))}</label>
       </div>
     </div>`).join('');
   document.getElementById('dashboardEditModal').classList.add('open');
@@ -366,7 +367,7 @@ function closeDashboardEdit() {
 }
 
 function pieceStepChecked(piece, step) {
-  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
   return required.includes(step) ? 'checked' : '';
 }
 
