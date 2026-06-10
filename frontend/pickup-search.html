@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
+<link rel="stylesheet" href="shared.css?v=20260609-pickup-hold-release">
 </head>
 <body>
 <div class="topbar">
@@ -47,8 +47,8 @@
   </button>
 </div>
 
-<script src="js/api.js?v=20260608-po-order-number"></script>
-<script src="js/i18n.js?v=20260608-po-order-number"></script>
+<script src="js/api.js?v=20260609-pickup-hold-release"></script>
+<script src="js/i18n.js?v=20260609-pickup-hold-release"></script>
 <script>
 const allowed = requireRolePage('boss');
 const params = new URLSearchParams(location.search);
@@ -161,6 +161,7 @@ async function loadAvailable() {
     return;
   }
   const query = new URLSearchParams({ customer_id: id });
+  query.set('include_hold', '1');
   if (activePoFilter) query.set('po', activePoFilter);
   const data = await api('/api/pickups/available?' + query.toString());
   grouped = data.orders || [];
@@ -187,32 +188,51 @@ function renderAvailable() {
     return;
   }
   const visiblePieceIds = visiblePickupPieceIds(filteredGroups);
+  const heldTotal = filteredGroups.reduce((sum, order) => sum + (order.pieces || []).filter((piece) => piece.hold).length, 0);
+  const disabledAttr = (disabled) => disabled ? 'disabled style="opacity:.5;"' : '';
   el.innerHTML = `
-    <div class="pickup-bulk-actions">
-      <button class="btn btn-ghost" id="pickupSelectAllBtn" type="button" ${visiblePieceIds.length === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="selectAllPickupVisible()">${esc(t('selectAll'))}</button>
-      <button class="btn btn-ghost" id="pickupClearAllBtn" type="button" ${selected.size === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="clearPickupSelection()">${esc(t('clearSelection'))}</button>
+    <div class="pickup-customer-hold-bar">
+      <div class="pickup-customer-hold-copy">
+        <div class="row-title">${esc(t('pickupCustomerHoldTitle'))}</div>
+        <div class="row-sub">${esc(tn('pickupAvailabilitySummary', { ready: visiblePieceIds.length, hold: heldTotal }))}</div>
+      </div>
+      <div class="pickup-customer-hold-actions">
+        <button class="btn btn-warn btn-inline-compact" type="button" ${disabledAttr(visiblePieceIds.length === 0)} onclick="holdPickupCustomer(true, event)">${esc(t('holdCustomerPickupBtn'))}</button>
+        <button class="btn btn-ghost btn-inline-compact" type="button" ${disabledAttr(heldTotal === 0)} onclick="holdPickupCustomer(false, event)">${esc(t('unholdCustomerPickupBtn'))}</button>
+      </div>
     </div>
-    ${filteredGroups.map(order => `
-    <div class="card pickup-order-panel flow-card">
+    <div class="pickup-bulk-actions">
+      <button class="btn btn-ghost" id="pickupSelectAllBtn" type="button" ${disabledAttr(visiblePieceIds.length === 0)} onclick="selectAllPickupVisible()">${esc(t('selectAll'))}</button>
+      <button class="btn btn-ghost" id="pickupClearAllBtn" type="button" ${disabledAttr(selected.size === 0)} onclick="clearPickupSelection()">${esc(t('clearSelection'))}</button>
+    </div>
+    ${filteredGroups.map(order => {
+      const pieces = order.pieces || [];
+      const selectable = pieces.filter((piece) => !piece.hold);
+      const heldCount = pieces.length - selectable.length;
+      return `
+    <div class="card pickup-order-panel flow-card" data-pickup-order="${order.order_id}">
       <div class="pickup-order-head">
         <div style="flex:1; min-width:0;">
           <div class="row-title">${esc(orderCodeText(order))}</div>
-          <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: order.pieces.length }))}</div>
+          <div class="row-sub">${esc(order.project_name || '')} · ${esc(tn('piecesShortN', { n: selectable.length }))}${heldCount ? ` · ${esc(tn('pickupHoldPiecesN', { n: heldCount }))}` : ''}</div>
         </div>
         <div class="pickup-order-actions">
-          <button class="btn btn-ghost btn-inline-compact" type="button" onclick="selectPickupOrder(${order.order_id})">${esc(t('selectAll'))}</button>
+          <button class="btn btn-ghost btn-inline-compact" type="button" ${disabledAttr(selectable.length === 0)} onclick="selectPickupOrder(${order.order_id})">${esc(t('selectAll'))}</button>
           <button class="btn btn-ghost btn-inline-compact" type="button" onclick="clearPickupOrder(${order.order_id})">${esc(t('clearSelection'))}</button>
+          <button class="btn btn-warn btn-inline-compact" type="button" ${disabledAttr(selectable.length === 0)} onclick="holdPickupOrder(${order.order_id}, true, event)">${esc(t('holdOrderPickupBtn'))}</button>
+          <button class="btn btn-ghost btn-inline-compact" type="button" ${disabledAttr(heldCount === 0)} onclick="holdPickupOrder(${order.order_id}, false, event)">${esc(t('unholdOrderPickupBtn'))}</button>
         </div>
       </div>
-      ${order.pieces.map(p => `
-        <label class="row" style="cursor:pointer;">
-          <input type="checkbox" data-piece="${p.id}" data-order="${order.order_id}" ${selected.has(Number(p.id)) ? 'checked' : ''} onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
+      ${pieces.map(p => `
+        <label class="row" style="cursor:${p.hold ? 'not-allowed' : 'pointer'}; ${p.hold ? 'opacity:.68;' : ''}">
+          <input type="checkbox" data-piece="${p.id}" data-order="${order.order_id}" ${selected.has(Number(p.id)) && !p.hold ? 'checked' : ''} ${p.hold ? 'disabled' : ''} onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
           <div style="flex:1;">
-            <div class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}</div>
-            <div class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}</div>
+            <div class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}${p.hold ? ` <span class="badge badge-warn pickup-hold-badge">${esc(t('pickupHoldState'))}</span>` : ''}</div>
+            <div class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}${p.hold ? ` · ${esc(t('pickupHoldState'))}` : ''}</div>
           </div>
         </label>`).join('')}
-    </div>`).join('')}`;
+    </div>`;
+    }).join('')}`;
   updatePickupFlow();
 }
 
@@ -222,12 +242,26 @@ function visiblePickupGroups() {
 }
 
 function visiblePickupPieceIds(groups = visiblePickupGroups()) {
-  return groups.flatMap((order) => (order.pieces || []).map((piece) => Number(piece.id)));
+  return groups.flatMap((order) => (order.pieces || [])
+    .filter((piece) => !piece.hold)
+    .map((piece) => Number(piece.id)));
+}
+
+function pickupPieceById(id) {
+  const target = Number(id);
+  for (const order of grouped) {
+    const piece = (order.pieces || []).find((row) => Number(row.id) === target);
+    if (piece) return piece;
+  }
+  return null;
 }
 
 function syncPickupChecks() {
   document.querySelectorAll('[data-piece]').forEach((input) => {
-    input.checked = selected.has(Number(input.dataset.piece));
+    const piece = pickupPieceById(input.dataset.piece);
+    if (piece && piece.hold) selected.delete(Number(input.dataset.piece));
+    input.disabled = Boolean(piece && piece.hold);
+    input.checked = !(piece && piece.hold) && selected.has(Number(input.dataset.piece));
   });
 }
 
@@ -246,6 +280,13 @@ function updatePickupBulkButtons() {
 }
 
 function togglePiece(id, on) {
+  const piece = pickupPieceById(id);
+  if (piece && piece.hold) {
+    selected.delete(Number(id));
+    syncPickupChecks();
+    updatePickupFlow();
+    return;
+  }
   if (on) selected.add(Number(id));
   else selected.delete(Number(id));
   syncPickupChecks();
@@ -262,7 +303,7 @@ function togglePiece(id, on) {
 }
 
 function selectPickupIds(ids) {
-  ids.forEach((id) => selected.add(Number(id)));
+  ids.filter((id) => { const piece = pickupPieceById(id); return !piece || !piece.hold; }).forEach((id) => selected.add(Number(id)));
   lastHadPieces = selected.size > 0;
   syncPickupChecks();
   updatePickupFlow();
@@ -288,12 +329,51 @@ function clearPickupSelection() {
 
 function selectPickupOrder(orderId) {
   const order = grouped.find((row) => Number(row.order_id) === Number(orderId));
-  selectPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
+  selectPickupIds(order ? (order.pieces || []).filter((piece) => !piece.hold).map((piece) => piece.id) : []);
 }
 
 function clearPickupOrder(orderId) {
   const order = grouped.find((row) => Number(row.order_id) === Number(orderId));
   clearPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
+}
+
+
+async function holdPickupOrder(orderId, hold, ev) {
+  const ok = await confirmModal({
+    title: hold ? t('holdOrderPickupConfirm') : t('unholdOrderPickupConfirm'),
+    body: hold ? t('holdOrderPickupBody') : t('unholdPickupBody'),
+    confirmText: hold ? t('holdOrderPickupBtn') : t('unholdOrderPickupBtn'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/hold-order', {
+      method: 'POST',
+      body: { order_id: Number(orderId), hold },
+    });
+    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
+    await loadAvailable();
+  });
+}
+
+async function holdPickupCustomer(hold, ev) {
+  const customerId = customerPicker ? customerPicker.getValue() : '';
+  if (!customerId) return;
+  const ok = await confirmModal({
+    title: hold ? t('holdCustomerPickupConfirm') : t('unholdCustomerPickupConfirm'),
+    body: hold ? t('holdCustomerPickupBody') : t('unholdPickupBody'),
+    confirmText: hold ? t('holdCustomerPickupBtn') : t('unholdCustomerPickupBtn'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/hold-customer', {
+      method: 'POST',
+      body: { customer_id: Number(customerId), hold },
+    });
+    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
+    await loadAvailable();
+  });
 }
 
 function updatePickupFlow() {

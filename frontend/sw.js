@@ -6,7 +6,7 @@
  * - Uploaded artifacts (/uploads/*): network-only, never cached, because access is role-gated.
  * - API calls (/api/*): network-only, never cached.
  */
-const VERSION = 'v52-2026-06-09-piece-labels';
+const VERSION = 'v53-2026-06-09-pickup-hold-release';
 const STATIC_CACHE = `glassorder-static-${VERSION}`;
 const ASSET_CACHE = `glassorder-assets-${VERSION}`;
 const PRECACHE_HTML = [

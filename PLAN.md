@@ -221,6 +221,22 @@ cd backend && npm install && npm start
 - Default service `:8781` restarted to load the new backend route; read-only checks confirmed health, `boss-order-detail.html` serves the new asset query, `sw.js` serves `v52-2026-06-09-piece-labels`, and `/api/orders/999999999/labels` returns JSON `Order not found` without writing default business data.
 
 
+## Phase 46：取片 HOLD 解除修复（2026-06-09）
+
+### 目标
+修复客户取单界面整单 HOLD 后无法解除的问题。
+
+### 实施
+- 取片可用列表支持 `include_hold=1`，让已 HOLD 的已完成未取片仍能显示在老板取片页中。
+- 新增整单 HOLD/解除、客户全部 HOLD/解除接口，只作用于 `stage='finished'` 且未取走的片。
+- 取片页显示 HOLD 片但禁用选择，同时保留解除按钮；全选和按单全选忽略 HOLD 片。
+- 新增 `scripts/pickup-hold-qa.js` 覆盖整单/客户 HOLD 与解除流程。
+
+### 验证
+- `BASE=http://localhost:8783 node scripts/pickup-hold-qa.js`
+- `BASE=http://localhost:8783 node scripts/select-all-qa.js`
+- `git diff --check`
+
 ## Phase 14：车间流程与交付功能更新（2026-06-07）
 
 ### 安全与数据隔离

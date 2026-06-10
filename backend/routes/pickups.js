@@ -70,10 +70,25 @@ function nextBatchNumber() {
   return `${prefix}-${String(seq).padStart(4, '0')}`;
 }
 
-function availableRows(customerId, poKeys = []) {
+function bodyBool(value, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'hold'].includes(text)) return true;
+  if (['0', 'false', 'no', 'off', 'unhold'].includes(text)) return false;
+  return fallback;
+}
+
+function queryBool(value) {
+  return bodyBool(queryString(value), false);
+}
+
+function availableRows(customerId, poKeys = [], options = {}) {
   const poFilter = poKeys.length
     ? `AND o.order_number_key IN (${poKeys.map((_, index) => `@po_key_${index}`).join(', ')})`
     : '';
+  const holdFilter = options.includeHold ? '' : 'AND p.hold = 0';
   const params = { customer_id: customerId };
   poKeys.forEach((key, index) => {
     params[`po_key_${index}`] = key;
@@ -96,7 +111,7 @@ function availableRows(customerId, poKeys = []) {
       AND o.archived_at IS NULL
       ${poFilter}
       AND p.stage = 'finished'
-      AND p.hold = 0
+      ${holdFilter}
       AND p.picked_up_at IS NULL
     ORDER BY o.deadline IS NULL, o.deadline, o.created_at, o.id, p.piece_no
   `).all(params);
@@ -167,10 +182,19 @@ router.get('/available', requireRole('boss'), (req, res) => {
   if (!customerId) return res.status(400).json({ error: 'customer_id is required' });
   const po = queryString(req.query.po);
   const poKeys = po ? poLookupKeys(po) : [];
+  const includeHold = queryBool(req.query.include_hold);
   const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
-  const rows = availableRows(customerId, poKeys);
-  res.json({ customer, orders: groupAvailable(rows), pieces: rows, total_pieces: rows.length, po: po || null });
+  const rows = availableRows(customerId, poKeys, { includeHold });
+  res.json({
+    customer,
+    orders: groupAvailable(rows),
+    pieces: rows,
+    total_pieces: rows.length,
+    hold_pieces: rows.filter((row) => row.hold).length,
+    po: po || null,
+    include_hold: includeHold,
+  });
 });
 
 router.get('/available/all', requireRole('boss'), (req, res) => {
@@ -197,6 +221,108 @@ router.get('/available/all', requireRole('boss'), (req, res) => {
     LIMIT 500
   `).all();
   res.json({ pieces: rows, total_pieces: rows.length });
+});
+
+
+router.post('/hold-order', requireRole('boss'), (req, res) => {
+  const orderId = safeInt((req.body || {}).order_id);
+  if (!orderId) return res.status(400).json({ error: 'order_id is required' });
+  const hold = bodyBool((req.body || {}).hold, true);
+  const order = db.prepare(`
+    SELECT o.id, o.order_number, o.customer_id, c.company
+    FROM orders o
+    JOIN customers c ON c.id = o.customer_id
+    WHERE o.id = ?
+  `).get(orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM pieces
+    WHERE order_id = ?
+      AND stage = 'finished'
+      AND picked_up_at IS NULL
+  `).get(order.id).n;
+  if (!total) return res.status(400).json({ error: 'No finished unpicked pieces found for this order' });
+
+  const info = db.prepare(`
+    UPDATE pieces
+    SET hold = ?
+    WHERE order_id = ?
+      AND stage = 'finished'
+      AND picked_up_at IS NULL
+      AND hold != ?
+  `).run(hold ? 1 : 0, order.id, hold ? 1 : 0);
+  insertEvent(order.id, null, req.user.id, hold ? 'pickup_order_hold' : 'pickup_order_unhold', {
+    order_number: order.order_number,
+    customer_id: order.customer_id,
+    changed: info.changes,
+    total,
+    note: (req.body || {}).note || null,
+  });
+  res.json({ ok: true, scope: 'order', hold, changed: info.changes, total, order });
+});
+
+router.post('/hold-customer', requireRole('boss'), (req, res) => {
+  const customerId = safeInt((req.body || {}).customer_id);
+  if (!customerId) return res.status(400).json({ error: 'customer_id is required' });
+  const hold = bodyBool((req.body || {}).hold, true);
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
+  if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+  const params = { customer_id: customer.id, hold: hold ? 1 : 0 };
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM pieces p
+    JOIN orders o ON o.id = p.order_id
+    WHERE o.customer_id = @customer_id
+      AND o.archived_at IS NULL
+      AND p.stage = 'finished'
+      AND p.picked_up_at IS NULL
+  `).get(params).n;
+  if (!total) return res.status(400).json({ error: 'No finished unpicked pieces found for this customer' });
+
+  const affectedOrders = db.prepare(`
+    SELECT p.order_id, o.order_number, COUNT(*) AS count
+    FROM pieces p
+    JOIN orders o ON o.id = p.order_id
+    WHERE o.customer_id = @customer_id
+      AND o.archived_at IS NULL
+      AND p.stage = 'finished'
+      AND p.picked_up_at IS NULL
+      AND p.hold != @hold
+    GROUP BY p.order_id, o.order_number
+    ORDER BY o.order_number
+  `).all(params);
+
+  const changed = db.transaction(() => {
+    const info = db.prepare(`
+      UPDATE pieces
+      SET hold = @hold
+      WHERE id IN (
+        SELECT p.id
+        FROM pieces p
+        JOIN orders o ON o.id = p.order_id
+        WHERE o.customer_id = @customer_id
+          AND o.archived_at IS NULL
+          AND p.stage = 'finished'
+          AND p.picked_up_at IS NULL
+          AND p.hold != @hold
+      )
+    `).run(params);
+    for (const row of affectedOrders) {
+      insertEvent(row.order_id, null, req.user.id, hold ? 'pickup_customer_hold' : 'pickup_customer_unhold', {
+        customer_id: customer.id,
+        company: customer.company,
+        order_number: row.order_number,
+        changed: row.count,
+        total,
+        note: (req.body || {}).note || null,
+      });
+    }
+    return info.changes;
+  })();
+  res.json({ ok: true, scope: 'customer', hold, changed, total, orders: affectedOrders, customer });
 });
 
 router.get('/batches', requireRole('boss'), (req, res) => {
