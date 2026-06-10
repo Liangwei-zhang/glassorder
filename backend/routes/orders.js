@@ -8,6 +8,7 @@ const db = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { parsePdf } = require('../services/pdfParser');
 const { createPickupSlip } = require('../services/slipPdf');
+const { createPieceLabelsPdf } = require('../services/pieceLabels');
 const { sendPickupEmail } = require('../services/mailer');
 const { decodeOptionalPngSignature } = require('../services/signature');
 const { extractPoCodeFromFilename, poCodeKey, poLookupKeys } = require('../services/poCode');
@@ -27,8 +28,10 @@ const uploadsBase = (db.runtime && db.runtime.uploadsBase)
   : path.join(__dirname, '..', 'uploads');
 const pdfDir = path.join(uploadsBase, 'pdfs');
 const orderUploadsDir = path.join(uploadsBase, 'orders');
+const labelDir = path.join(uploadsBase, 'labels');
 fs.mkdirSync(pdfDir, { recursive: true });
 fs.mkdirSync(orderUploadsDir, { recursive: true });
+fs.mkdirSync(labelDir, { recursive: true });
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -369,6 +372,51 @@ router.get('/:id', requireRole('boss'), (req, res) => {
   const order = getOrderWithPieces(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   res.json({ order });
+});
+
+router.post('/:id/labels', requireRole('boss'), async (req, res, next) => {
+  try {
+    const order = getOrderWithPieces(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    let pieces = order.pieces || [];
+    const requestedIds = Array.isArray(req.body && req.body.piece_ids)
+      ? [...new Set(req.body.piece_ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+      : [];
+    if (requestedIds.length) {
+      const requestedSet = new Set(requestedIds);
+      pieces = pieces.filter((piece) => requestedSet.has(Number(piece.id)));
+      if (pieces.length !== requestedIds.length) {
+        return res.status(400).json({ error: 'piece_ids must belong to this order' });
+      }
+    }
+    if (!pieces.length) return res.status(400).json({ error: 'No pieces selected for labels' });
+
+    const fileOrderCode = safeSegment(order.order_number);
+    const labelFile = `labels-${fileOrderCode}-${Date.now()}.pdf`;
+    const outputPath = path.join(labelDir, labelFile);
+    await createPieceLabelsPdf({
+      order,
+      pieces,
+      outputPath,
+      uploadsBase,
+    });
+    const labelPdfPath = `/uploads/labels/${labelFile}`;
+    insertEvent(order.id, null, req.user.id, 'piece_labels_generated', {
+      label_pdf_path: labelPdfPath,
+      count: pieces.length,
+      piece_ids: pieces.map((piece) => piece.id),
+    });
+
+    res.json({
+      ok: true,
+      label_pdf_path: labelPdfPath,
+      count: pieces.length,
+      piece_ids: pieces.map((piece) => piece.id),
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.patch('/:id', requireRole('boss'), (req, res) => {

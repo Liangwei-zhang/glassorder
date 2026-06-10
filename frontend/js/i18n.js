@@ -210,6 +210,11 @@ window.__I18N_ZH__ = {
     timelineN: '事件时间线（最近 {n} 条）',
     downloadSlip: '下载取货凭证 PDF',
     downloadSlipSub: '签字已存档，可下载或打印',
+    pieceLabelsTitle: '玻璃生产标签',
+    pieceLabelsSubN: '按照片格式生成 {n} 张标签，可下载或打印',
+    printAllPieceLabels: '打印全部标签',
+    printPieceLabel: '单片标签',
+    pieceLabelsGeneratedN: '已生成 {n} 张标签',
     archivedAt: '归档时间',
     archivedOrderNote: '此订单已归档，不再出现在当前订单列表。',
     archiveOrderConfirm: '移入归档？',
@@ -234,6 +239,7 @@ window.__I18N_ZH__ = {
     evt_piece_batch_advanced: '批量推进',
     evt_piece_picked_up: '片取货',
     evt_piece_pickup_reverted: '片取货回退',
+    evt_piece_labels_generated: '玻璃标签生成',
     evt_pickup_slip_sent: '交割单邮件',
     evt_order_archived: '订单归档',
 
@@ -384,6 +390,7 @@ window.__I18N_ZH__ = {
 
     // menu items
     menuEditOrder: '修改订单',
+    menuPrintPieceLabels: '打印玻璃标签',
     menuSendSlip: '发送交割单',
     menuDownloadPdf: '下载 PDF',
     menuMarkReady: '通知可取货',
@@ -636,6 +643,11 @@ window.__I18N_EN__ = {
     timelineN: 'Timeline (latest {n})',
     downloadSlip: 'Download Pickup Slip PDF',
     downloadSlipSub: 'Signed copy on file',
+    pieceLabelsTitle: 'Glass Production Labels',
+    pieceLabelsSubN: 'Generate {n} printable labels using the shop label layout',
+    printAllPieceLabels: 'Print All Labels',
+    printPieceLabel: 'Piece Label',
+    pieceLabelsGeneratedN: '{n} labels generated',
     archivedAt: 'Archived at',
     archivedOrderNote: 'This order is archived and hidden from the active order list.',
     archiveOrderConfirm: 'Move to archive?',
@@ -659,6 +671,7 @@ window.__I18N_EN__ = {
     evt_piece_batch_advanced: 'Batch advance',
     evt_piece_picked_up: 'Piece picked up',
     evt_piece_pickup_reverted: 'Piece pickup reverted',
+    evt_piece_labels_generated: 'Piece labels generated',
     evt_pickup_slip_sent: 'Slip emailed',
     evt_order_archived: 'Order archived',
 
@@ -804,6 +817,7 @@ window.__I18N_EN__ = {
     pickupSelectedHintN: '{n} selected. Signer name is required; signature is optional.',
 
     menuEditOrder: 'Edit order',
+    menuPrintPieceLabels: 'Print glass labels',
     menuSendSlip: 'Send slip',
     menuDownloadPdf: 'Download PDF',
     menuMarkReady: 'Mark ready',

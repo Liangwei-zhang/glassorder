@@ -200,6 +200,11 @@ window.__I18N_EN__ = {
     timelineN: 'Timeline (latest {n})',
     downloadSlip: 'Download Pickup Slip PDF',
     downloadSlipSub: 'Signed copy on file',
+    pieceLabelsTitle: 'Glass Production Labels',
+    pieceLabelsSubN: 'Generate {n} printable labels using the shop label layout',
+    printAllPieceLabels: 'Print All Labels',
+    printPieceLabel: 'Piece Label',
+    pieceLabelsGeneratedN: '{n} labels generated',
     archivedAt: 'Archived at',
     archivedOrderNote: 'This order is archived and hidden from the active order list.',
     archiveOrderConfirm: 'Move to archive?',
@@ -223,6 +228,7 @@ window.__I18N_EN__ = {
     evt_piece_batch_advanced: 'Batch advance',
     evt_piece_picked_up: 'Piece picked up',
     evt_piece_pickup_reverted: 'Piece pickup reverted',
+    evt_piece_labels_generated: 'Piece labels generated',
     evt_pickup_slip_sent: 'Slip emailed',
     evt_order_archived: 'Order archived',
 
@@ -368,6 +374,7 @@ window.__I18N_EN__ = {
     pickupSelectedHintN: '{n} selected. Signer name is required; signature is optional.',
 
     menuEditOrder: 'Edit order',
+    menuPrintPieceLabels: 'Print glass labels',
     menuSendSlip: 'Send slip',
     menuDownloadPdf: 'Download PDF',
     menuMarkReady: 'Mark ready',

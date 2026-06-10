@@ -209,6 +209,11 @@ window.__I18N_ZH__ = {
     timelineN: '事件时间线（最近 {n} 条）',
     downloadSlip: '下载取货凭证 PDF',
     downloadSlipSub: '签字已存档，可下载或打印',
+    pieceLabelsTitle: '玻璃生产标签',
+    pieceLabelsSubN: '按照片格式生成 {n} 张标签，可下载或打印',
+    printAllPieceLabels: '打印全部标签',
+    printPieceLabel: '单片标签',
+    pieceLabelsGeneratedN: '已生成 {n} 张标签',
     archivedAt: '归档时间',
     archivedOrderNote: '此订单已归档，不再出现在当前订单列表。',
     archiveOrderConfirm: '移入归档？',
@@ -233,6 +238,7 @@ window.__I18N_ZH__ = {
     evt_piece_batch_advanced: '批量推进',
     evt_piece_picked_up: '片取货',
     evt_piece_pickup_reverted: '片取货回退',
+    evt_piece_labels_generated: '玻璃标签生成',
     evt_pickup_slip_sent: '交割单邮件',
     evt_order_archived: '订单归档',
 
@@ -383,6 +389,7 @@ window.__I18N_ZH__ = {
 
     // menu items
     menuEditOrder: '修改订单',
+    menuPrintPieceLabels: '打印玻璃标签',
     menuSendSlip: '发送交割单',
     menuDownloadPdf: '下载 PDF',
     menuMarkReady: '通知可取货',

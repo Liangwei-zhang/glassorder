@@ -122,6 +122,105 @@ cd backend && npm install && npm start
 ## 验证脚本
 `backend/scripts/smoke.sh` — 跑一遍 T3/T4/T6/T8/T9 的 curl 链路
 
+## Phase 45：每片玻璃生产标签 PDF（2026-06-09）
+
+### 目标
+根据订单和每片玻璃的现有数据，自动生成可打印的生产标签 PDF。标签按一片一页输出，适合先用 PDF 打印验证，后续如需 Zebra/TSC 标签机再扩展为 ZPL/TSPL。
+
+### 数据字段策略
+- 已有字段直接使用：
+  - 订单：`order_number` 作为 PO、`project_name`、`deadline`、`company`
+  - 片：`piece_no`、`size`、`type`、`thickness`、`weight`、`piece_note`、`drawing_path`、`required_steps`
+- 缺失字段不新增数据库列：
+  - `ORDER` 用 `PO-piece_no`
+  - `ROUTE` 暂用 `STANDARD/RUSH`
+  - `SHIP` 用订单 `deadline`
+  - `SHAPE` 有图纸时显示 `LIBRARY`，否则 `STANDARD`
+  - `SUMP`/条码用稳定系统码 `GO-orderId-pieceId-pieceNo`
+- 标签会尽量模仿客户照片：顶部订单/PO/ship，客户名大字，片号和尺寸大字，右侧图纸预览/重量/Workflow，底部 Code128 条码和 SUMP 文本。
+
+### P45-T1 后端标签 PDF 服务
+- 新增 `backend/services/pieceLabels.js`。
+- 使用 PDFKit 生成 4x6 inch 每片一页标签。
+- 生成 Code128B 条码，不引入新依赖。
+- 支持图纸预览：`drawing_path` 存在时嵌入右侧预览框。
+- **验收标准**：
+  - 可对整单生成标签 PDF。
+  - 可对指定单片/多片生成标签 PDF。
+  - PDF 文本包含 PO、客户名、片号、尺寸、Workflow、SUMP。
+  - 条码和 SUMP 值稳定，重复生成不会依赖随机业务数据。
+- **验证命令**：
+  - `node --check backend/services/pieceLabels.js`
+
+### P45-T2 标签 API
+- 新增 `POST /api/orders/:id/labels`，仅 boss 可用。
+- Body 可选：`{ "piece_ids": [1,2] }`；不传则生成整单所有片。
+- 输出保存到 `/uploads/labels/*.pdf`，返回 `label_pdf_path`、`count`、`piece_ids`。
+- 写入事件 `piece_labels_generated`。
+- **验收标准**：
+  - 非法订单 404。
+  - 空片/不属于该订单的片返回 400。
+  - 生成的 `/uploads/labels/*.pdf` 可通过已登录 boss 下载。
+- **验证命令**：
+  - `BASE=http://localhost:8783 node scripts/piece-label-qa.js`
+
+### P45-T3 老板订单详情入口
+- 在 `boss-order-detail.html` 增加“玻璃标签”工具卡。
+- 支持：
+  - 打印/下载整单标签
+  - 每片单独打印/下载标签
+  - 顶部菜单增加“打印玻璃标签”
+- **验收标准**：
+  - 订单详情页显示标签工具卡。
+  - 点击整单标签按钮会调用标签 API 并打开生成 PDF。
+  - 点击单片标签按钮只生成 1 张标签。
+  - 页面无横向溢出、无 console error。
+- **验证命令**：
+  - `BASE=http://localhost:8783 node scripts/piece-label-qa.js`
+
+### P45-T4 缓存/i18n/回归
+- 更新 i18n 中英文文案。
+- 更新 `boss-order-detail.html` 资源 query 和 `sw.js` cache 版本，避免现场继续使用旧页面。
+- **验收标准**：
+  - `frontend/js/i18n.js` 由 split source 重新生成。
+  - `boss-order-detail.html` 和 SW 使用新版本标识。
+  - 不影响取货/全选/HOLD 基础流程。
+- **验证命令**：
+  - `./scripts/build-i18n.sh`
+  - `node --check frontend/js/api.js`
+  - `node --check frontend/sw.js`
+  - `node --check scripts/piece-label-qa.js`
+  - `BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `git diff --check`
+
+### P45 最终验收
+- 目标 QA 全部通过。
+- 默认服务 `:8781` 健康，并能返回新版 `boss-order-detail.html`/`sw.js`。
+- 不写默认生产数据；写入型验证只在 codex QA profile `:8783` 执行。
+
+### P45 验收结果（2026-06-09）
+- 后端标签服务完成：`backend/services/pieceLabels.js` 使用 PDFKit 生成 4x6 inch 每片一页标签 PDF，包含 PO/ORDER/ROUTE/SHIP、客户名、片号、尺寸、mm 尺寸、备注、图纸预览、重量、Workflow、Code128 条码和 SUMP。
+- 按客户样片二次修版：中部增加 `Glaze In` 和 `>>` 标识，底部增加 `TM/CNC` 生产码和 FAB 旗标；右侧 Workflow、底部 CUT/FAB/RACK/SLOT/条码重新排版，避免互相覆盖；长 PO/订单号在顶部和 CUT 行做显示短化，完整码仍保留在小字 PO、条码和 SUMP 中。
+- 按客户原图红框修正：右上角图形不再直接缩小整页图纸，而是用 `sharp` 自动裁出当前玻璃片轮廓并缓存到 `uploads/labels/shape-previews/` 后嵌入标签；RACK/SLOT 后面的线改为水平线。
+- 标签 API 完成：`POST /api/orders/:id/labels` 支持整单和指定 `piece_ids`，输出 `/uploads/labels/*.pdf`，并写 `piece_labels_generated` 审计事件。
+- 老板订单详情完成：新增“玻璃生产标签”工具卡，支持整单标签和单片标签；顶部菜单新增“打印玻璃标签”。点击时先打开空白页再生成 PDF，降低浏览器弹窗拦截风险。
+- i18n/cache 完成：新增中英文标签文案，重建 `frontend/js/i18n.js`，`boss-order-detail.html` 资源 query 更新为 `20260609-piece-labels`，SW cache 更新到 `v52-2026-06-09-piece-labels`。
+- 验证通过：
+  - `node --check backend/routes/orders.js`
+  - `node --check backend/services/pieceLabels.js`
+  - `node --check scripts/piece-label-qa.js`
+  - `node --check frontend/sw.js`
+  - `node --check frontend/js/api.js`
+  - `./scripts/build-i18n.sh`
+  - boss order detail inline script check
+  - `BASE=http://localhost:8783 node scripts/piece-label-qa.js`
+  - `BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `npm ls --prefix backend sharp --depth=0`
+  - `pdftoppm -png -f 1 -l 1 -singlefile -r 160 <latest-label.pdf> /tmp/glassorder-label-qa-latest` 后人工对照样片确认版面无重叠
+  - `git diff --check`
+- Default service `:8781` restarted to load the new backend route; read-only checks confirmed health, `boss-order-detail.html` serves the new asset query, `sw.js` serves `v52-2026-06-09-piece-labels`, and `/api/orders/999999999/labels` returns JSON `Order not found` without writing default business data.
+
+
 ## Phase 14：车间流程与交付功能更新（2026-06-07）
 
 ### 安全与数据隔离
