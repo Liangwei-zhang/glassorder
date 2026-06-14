@@ -66,8 +66,8 @@ async function seedCustomerWithOrders(session) {
   return { ...c.customer, orders: [orderA, orderB] };
 }
 
-async function draw(page) {
-  const box = await page.locator('#sig').boundingBox();
+async function drawCustomerSignature(page) {
+  const box = await page.locator('#customerSig').boundingBox();
   if (!box) throw new Error('signature canvas missing');
   const points = [
     { clientX: box.x + 20, clientY: box.y + 30 },
@@ -75,11 +75,18 @@ async function draw(page) {
     { clientX: box.x + 90, clientY: box.y + 62 },
     { clientX: box.x + 120, clientY: box.y + 70 },
   ];
-  await page.dispatchEvent('#sig', 'pointerdown', { ...points[0], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+  await page.dispatchEvent('#customerSig', 'pointerdown', { ...points[0], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
   for (const point of points.slice(1)) {
-    await page.dispatchEvent('#sig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+    await page.dispatchEvent('#customerSig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
   }
-  await page.dispatchEvent('#sig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+  await page.dispatchEvent('#customerSig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+}
+
+async function waitSelectedCount(page, expected) {
+  await page.waitForFunction((n) => (
+    document.querySelectorAll('[data-piece]:checked').length === n
+      && new RegExp(`(已选 ${n} 片|${n} selected)`, 'i').test(document.querySelector('#pickupStepper')?.textContent || '')
+  ), expected, { timeout: 10000 });
 }
 
 (async () => {
@@ -127,17 +134,35 @@ async function draw(page) {
     const checks = await page.locator('[data-piece]').count();
     if (checks < 16) throw new Error(`expected at least 16 available pieces, got ${checks}`);
     await page.locator('[data-piece]').nth(0).check();
-    await page.waitForFunction(() => /已选 1 片|1 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
+    await waitSelectedCount(page, 1);
     await page.locator('[data-piece]').nth(8).check();
-    await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
-    await page.fill('#name', 'Browser Pickup Signer');
-    const signatureOptionalText = await page.locator('#signatureCard').textContent();
-    if (!/可选|optional/i.test(signatureOptionalText || '')) {
-      throw new Error(`signature optional copy missing: ${signatureOptionalText}`);
-    }
+    await waitSelectedCount(page, 2);
     await page.click('#submitBtn');
     await page.waitForSelector('.modal-backdrop.open');
     await page.locator('.modal-backdrop.open [data-role="ok"]').click();
+    await page.waitForSelector('#qrCard:not([style*="display:none"]) svg', { timeout: 10000 });
+    const signUrl = await page.locator('#qrLink').textContent();
+    if (!/customer-sign\.html\?t=/.test(signUrl || '')) throw new Error(`missing customer sign url: ${signUrl}`);
+    const lockedChecks = await page.locator('[data-piece]:disabled').count();
+    if (lockedChecks < 2) throw new Error(`selected pieces should lock while QR is pending, disabled=${lockedChecks}`);
+
+    const customerPage = await context.newPage();
+    await customerPage.goto(signUrl.trim(), { waitUntil: 'networkidle' });
+    await customerPage.waitForSelector('#customerSig', { timeout: 10000 });
+    const customerText = await customerPage.locator('body').textContent();
+    if (!/签收确认|Pickup Sign-off/.test(customerText || '') || !/本次取货|Pickup pieces/.test(customerText || '')) {
+      throw new Error(`customer sign page did not render pickup summary: ${customerText}`);
+    }
+    if (/403-555|example\.test|Private Contact|客户管理|Customers/.test(customerText || '')) {
+      throw new Error(`customer sign page leaked sensitive/admin text: ${customerText}`);
+    }
+    await customerPage.fill('#signerName', 'Browser Pickup Signer');
+    await customerPage.fill('#signerPhone', '403-555-1212');
+    await drawCustomerSignature(customerPage);
+    await customerPage.click('#submitSignBtn');
+    await customerPage.waitForFunction(() => /签收完成|Signature Submitted/.test(document.body.textContent || ''), null, { timeout: 10000 });
+    await customerPage.close();
+
     await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
     await page.waitForFunction(() => (
       [...document.querySelectorAll('button')].some((btn) => /下载|Download/.test(btn.textContent || ''))
@@ -145,7 +170,7 @@ async function draw(page) {
     const detailUrl = page.url();
     const createdBatchId = new URL(detailUrl).searchParams.get('id');
     const createdBatch = await api(`/api/pickups/batches/${createdBatchId}`, { headers: auth(boss) });
-    if (createdBatch.batch.signature_path) throw new Error('unsigned pickup should not store signature_path');
+    if (!createdBatch.batch.signature_path) throw new Error('QR signed pickup should store signature_path');
     const detailText = await page.locator('#body').textContent();
     if (!/Browser Pickup|第 1 片|第 2 片|Piece/.test(detailText || '') || !/订单数|Orders/.test(detailText || '')) throw new Error('batch detail did not render pieces/summary');
     await page.goto(BASE + '/pickup-batches.html', { waitUntil: 'networkidle' });

@@ -94,8 +94,10 @@ async function removePwaBanner(page) {
 
 async function waitSummary(page, n) {
   await page.waitForFunction((count) => {
-    const text = document.getElementById('selectedSummary')?.textContent || '';
-    return new RegExp(`已选 ${count} 片|${count} selected`).test(text);
+    const text = document.getElementById('pickupStepper')?.textContent || '';
+    return selected.size === count
+      && document.querySelectorAll('[data-piece]:checked').length === count
+      && new RegExp(`已选 ${count} 片|${count} selected`).test(text);
   }, n, { timeout: 10000 });
 }
 
@@ -146,16 +148,19 @@ async function waitSummary(page, n) {
     if (!cutIds.every((id) => cutState.selectedIds.includes(id))) {
       throw new Error(`worker cut select-all missing cut ids: ${JSON.stringify(cutState)}`);
     }
-    await page.locator('#clearSelectionBtn').click();
-    const clearState = await page.evaluate(() => ({
-      selected: document.querySelectorAll('#grid .piece.selected').length,
-      ids: [...selectedIds],
-    }));
-    if (clearState.selected !== 0 || clearState.ids.length !== 0) {
-      throw new Error(`worker clear selection failed: ${JSON.stringify(clearState)}`);
+    await page.locator('#actionBar .btn-success').click();
+    await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
+    await page.waitForFunction(() => !document.body.classList.contains('select-mode') && document.querySelectorAll('#grid [data-id]').length === 0, null, { timeout: 10000 });
+    const cutAfterBatch = await api(`/api/orders/${workerOrder.id}`, { headers: auth(session) });
+    const movedCutPieces = cutAfterBatch.order.pieces
+      .filter((piece) => cutIds.includes(Number(piece.id)))
+      .map((piece) => ({ id: Number(piece.id), stage: piece.stage, next_step: piece.next_step }));
+    if (!movedCutPieces.every((piece) => piece.stage === 'edge' && piece.next_step === 'edge')) {
+      throw new Error(`worker batch complete should advance cut to edge only: ${JSON.stringify(movedCutPieces)}`);
     }
 
     await page.locator('.stage-tab[data-stage="tempered"]').click();
+    await page.locator('#selectToggle').click();
     await page.locator('#selectAllViewBtn').click();
     const temperedState = await page.evaluate(() => ({
       visible: document.querySelectorAll('#grid [data-id]').length,
@@ -170,7 +175,14 @@ async function waitSummary(page, n) {
     await removePwaBanner(page);
     await page.fill('#customerPicker input[type="search"]', customer.company);
     await page.locator(`.customer-picker-option[data-id="${customer.id}"]`).click();
-    await page.waitForSelector('[data-piece]');
+    const expectedPickupIds = [
+      ...pickupA.pieces.map((piece) => Number(piece.id)),
+      ...pickupB.pieces.map((piece) => Number(piece.id)),
+    ];
+    await page.waitForFunction((ids) => {
+      const visible = [...document.querySelectorAll('[data-piece]')].map((input) => Number(input.dataset.piece));
+      return ids.every((id) => visible.includes(id));
+    }, expectedPickupIds, { timeout: 10000 });
     const availableCount = await page.locator('[data-piece]').count();
     if (availableCount !== 16) throw new Error(`expected 16 pickup pieces, got ${availableCount}`);
 
@@ -190,9 +202,28 @@ async function waitSummary(page, n) {
       selected: selected.size,
       summary: document.getElementById('selectedSummary')?.textContent || '',
     }));
-    if (pickupClear.checked !== 0 || pickupClear.selected !== 0 || !/确认取货|Confirm Pickup/.test(pickupClear.summary)) {
+    if (pickupClear.checked !== 0 || pickupClear.selected !== 0 || !/签字二维码|Signing QR/i.test(pickupClear.summary)) {
       throw new Error(`pickup clear-all failed: ${JSON.stringify(pickupClear)}`);
     }
+
+    const firstPanel = page.locator('.pickup-order-panel').first();
+    await firstPanel.locator('.pickup-order-actions button').nth(2).click();
+    await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-piece]:disabled').length === 8, null, { timeout: 10000 });
+    await page.locator('#pickupSelectAllBtn').click();
+    await waitSummary(page, 8);
+    const pickupAfterHold = await page.evaluate(() => ({
+      disabled: document.querySelectorAll('[data-piece]:disabled').length,
+      checked: document.querySelectorAll('[data-piece]:checked').length,
+      selected: selected.size,
+    }));
+    if (pickupAfterHold.disabled !== 8 || pickupAfterHold.checked !== 8 || pickupAfterHold.selected !== 8) {
+      throw new Error(`pickup hold UI failed: ${JSON.stringify(pickupAfterHold)}`);
+    }
+    await page.locator('#pickupClearAllBtn').click();
+    await page.locator('.pickup-order-panel').first().locator('.pickup-order-actions button').nth(3).click();
+    await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-piece]:disabled').length === 0, null, { timeout: 10000 });
 
     await page.locator('.pickup-order-actions button').first().click();
     await waitSummary(page, 8);

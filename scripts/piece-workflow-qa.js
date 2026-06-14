@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* QA for the default cut -> edge -> tempered -> polish -> finished workflow. */
+/* QA for default workflow plus optional polishing and finished-piece corrections. */
 const fs = require('fs');
 const path = require('path');
 
@@ -53,14 +53,14 @@ function auth(session) {
   const created = await api('/api/orders', { method: 'POST', headers, body: form });
   let detail = await api(`/api/orders/${created.order.id}`, { headers });
   const piece = detail.order.pieces[0];
-  if (!piece.required_steps.includes('polish')) {
-    throw new Error(`new order piece missing polish: ${JSON.stringify(piece.required_steps)}`);
+  if (piece.required_steps.includes('polish')) {
+    throw new Error(`new order piece should not require polish by default: ${JSON.stringify(piece.required_steps)}`);
   }
-  if (piece.required_steps.join(',') !== 'cut,edge,tempered,polish') {
+  if (piece.required_steps.join(',') !== 'cut,edge,tempered') {
     throw new Error(`unexpected default workflow: ${piece.required_steps.join(',')}`);
   }
 
-  const expectedStages = ['edge', 'tempered', 'polish', 'finished'];
+  const expectedStages = ['edge', 'tempered', 'finished'];
   let current = piece;
   for (let i = 0; i < expectedStages.length; i += 1) {
     const advanced = await api(`/api/pieces/${current.id}/advance`, {
@@ -75,25 +75,64 @@ function auth(session) {
 
   const polishQueue = await api(`/api/pieces?stage=polish&order_id=${created.order.id}`, { headers });
   if (polishQueue.pieces.some((row) => Number(row.id) === Number(piece.id))) {
-    throw new Error('finished piece should no longer appear in polish queue');
+    throw new Error('default finished piece should not appear in polish queue');
   }
 
   const secondPiece = detail.order.pieces[1];
   for (let i = 0; i < 3; i += 1) {
     await api(`/api/pieces/${secondPiece.id}/advance`, { method: 'POST', headers });
   }
+  const sentPolish = await api(`/api/pieces/${secondPiece.id}/send-polish`, { method: 'POST', headers });
+  if (sentPolish.piece.stage !== 'polish') {
+    throw new Error(`send-polish expected stage polish, got ${sentPolish.piece.stage}`);
+  }
+  if (!sentPolish.piece.required_steps.includes('polish') || sentPolish.piece.next_step !== 'polish') {
+    throw new Error(`send-polish did not add optional polish: ${JSON.stringify(sentPolish.piece.required_steps)} next=${sentPolish.piece.next_step}`);
+  }
   const polishQueueAfter = await api(`/api/pieces?stage=polish&order_id=${created.order.id}`, { headers });
   if (!polishQueueAfter.pieces.some((row) => Number(row.id) === Number(secondPiece.id))) {
-    throw new Error('piece should appear in polish queue after third advance');
+    throw new Error('piece should appear in polish queue after send-polish');
+  }
+  const polished = await api(`/api/pieces/${secondPiece.id}/advance`, { method: 'POST', headers });
+  if (polished.piece.stage !== 'finished') {
+    throw new Error(`polish advance expected finished, got ${polished.piece.stage}`);
   }
 
   detail = await api(`/api/orders/${created.order.id}`, { headers });
   const secondAfter = detail.order.pieces.find((row) => Number(row.id) === Number(secondPiece.id));
-  if (!secondAfter || secondAfter.next_step !== 'polish') {
-    throw new Error(`expected second piece next_step polish, got ${secondAfter && secondAfter.next_step}`);
+  if (!secondAfter || secondAfter.stage !== 'finished' || secondAfter.next_step !== null) {
+    throw new Error(`expected second piece finished after polishing, got ${secondAfter && secondAfter.stage} next=${secondAfter && secondAfter.next_step}`);
   }
 
-  console.log(`PIECE WORKFLOW QA PASS order=${created.order.id} piece=${piece.id} polish_piece=${secondPiece.id}`);
+  const thirdPiece = detail.order.pieces[2];
+  for (let i = 0; i < 3; i += 1) {
+    await api(`/api/pieces/${thirdPiece.id}/advance`, { method: 'POST', headers });
+  }
+  detail = await api(`/api/orders/${created.order.id}`, { headers });
+  const unfinished = detail.order.pieces.filter((row) => row.stage !== 'finished').map((row) => row.id);
+  if (unfinished.length) {
+    await api('/api/pieces/batch', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'complete', piece_ids: unfinished }),
+    });
+  }
+  await api(`/api/orders/${created.order.id}/ready`, { method: 'POST', headers });
+  const returned = await api(`/api/pieces/${thirdPiece.id}/return-previous`, { method: 'POST', headers });
+  if (returned.piece.stage !== 'tempered' || returned.piece.next_step !== 'tempered') {
+    throw new Error(`return previous expected tempered, got ${returned.piece.stage} next=${returned.piece.next_step}`);
+  }
+  const orderAfterReturn = await api(`/api/orders/${created.order.id}`, { headers });
+  if (orderAfterReturn.order.status !== 'in_production') {
+    throw new Error(`order should return to in_production after previous step, got ${orderAfterReturn.order.status}`);
+  }
+  await api(`/api/pieces/${thirdPiece.id}/advance`, { method: 'POST', headers });
+  const redone = await api(`/api/pieces/${thirdPiece.id}/redo`, { method: 'POST', headers });
+  if (redone.piece.stage !== 'cut' || redone.piece.rework !== true || redone.piece.broken !== false) {
+    throw new Error(`redo expected cut rework=true broken=false, got ${JSON.stringify({ stage: redone.piece.stage, rework: redone.piece.rework, broken: redone.piece.broken })}`);
+  }
+
+  console.log(`PIECE WORKFLOW QA PASS order=${created.order.id} piece=${piece.id} polish_piece=${secondPiece.id} redo_piece=${thirdPiece.id}`);
 })().catch((err) => {
   console.error(err.stack || err.message);
   process.exit(1);

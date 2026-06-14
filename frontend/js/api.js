@@ -53,6 +53,16 @@ function isIosBrowser() {
   return iOS && webkit && !standalone;
 }
 
+function isPwaInstallSuppressed() {
+  if (typeof document === 'undefined') return false;
+  const html = document.documentElement;
+  const body = document.body;
+  return Boolean(
+    (html && html.dataset && html.dataset.pwaInstall === 'off')
+    || (body && body.dataset && body.dataset.pwaInstall === 'off')
+  );
+}
+
 function lockAppOverlay() {
   overlayDepth += 1;
   if (overlayDepth === 1 && document.body) document.body.classList.add('app-overlay-open');
@@ -181,6 +191,11 @@ function setPwaModeClasses() {
 }
 
 async function launchInstallPrompt() {
+  if (isPwaInstallSuppressed()) {
+    closePwaBanner('install');
+    closePwaBanner('ios-install');
+    return;
+  }
   if (installPromptEvent && typeof installPromptEvent.prompt === 'function') {
     installPromptEvent.prompt();
     try { await installPromptEvent.userChoice; } catch (_) {}
@@ -204,19 +219,20 @@ async function launchInstallPrompt() {
 function refreshAppShellLabels() {
   setPwaModeClasses();
   const installed = isStandaloneMode();
+  const suppressInstall = isPwaInstallSuppressed();
   document.querySelectorAll('[data-app-line-browser]').forEach((el) => {
     el.textContent = t(installed ? el.dataset.appLineInstalled : el.dataset.appLineBrowser);
   });
   document.querySelectorAll('[data-install-hide-installed]').forEach((el) => {
-    el.hidden = installed;
+    el.hidden = installed || suppressInstall;
   });
   document.querySelectorAll('[data-install-only-browser]').forEach((el) => {
-    el.hidden = installed;
+    el.hidden = installed || suppressInstall;
   });
 }
 
 function showInstallBanner() {
-  if (isStandaloneMode()) {
+  if (isStandaloneMode() || isPwaInstallSuppressed()) {
     closePwaBanner('install');
     closePwaBanner('ios-install');
     return;
@@ -263,6 +279,10 @@ function hideOfflineBanner() {
 }
 
 function showUpdateBanner() {
+  if (isPwaInstallSuppressed()) {
+    closePwaBanner('update-ready');
+    return;
+  }
   if (pendingRefreshAction) return;
   pendingRefreshAction = () => {
     sessionStorage.removeItem('__sw_reloaded__');
@@ -288,6 +308,12 @@ function initPwaRuntime() {
 
   window.addEventListener('beforeinstallprompt', (event) => {
     event.preventDefault();
+    if (isPwaInstallSuppressed()) {
+      installPromptEvent = null;
+      closePwaBanner('install');
+      closePwaBanner('ios-install');
+      return;
+    }
     installPromptEvent = event;
     refreshAppShellLabels();
     showInstallBanner();
@@ -546,6 +572,7 @@ initNativeContextMenuGuard();
 // PWA: register service worker + inject manifest/iOS meta tags once per page load.
 (function injectPwaTags() {
   if (typeof document === 'undefined') return;
+  if (isPwaInstallSuppressed()) return;
   const head = document.head;
   if (!head) return;
   if (!head.querySelector('link[rel="manifest"]')) {
@@ -553,6 +580,14 @@ initNativeContextMenuGuard();
     m.rel = 'manifest';
     m.href = '/manifest.json';
     head.appendChild(m);
+  }
+  if (!head.querySelector('link[rel="icon"]')) {
+    const icon = document.createElement('link');
+    icon.rel = 'icon';
+    icon.type = 'image/png';
+    icon.sizes = '32x32';
+    icon.href = '/icons/favicon-32.png';
+    head.appendChild(icon);
   }
   if (!head.querySelector('meta[name="theme-color"]')) {
     const tc = document.createElement('meta');
@@ -585,10 +620,10 @@ initNativeContextMenuGuard();
     head.appendChild(at);
   }
 })();
-if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && !isPwaInstallSuppressed()) {
   // One-shot cache nuke for this release — guarantees stale 'stale-while-revalidate'
   // caches from earlier SW versions cannot serve outdated HTML.
-  const NUKE_KEY = '__sw_nuke_2026_05_22_optional_signature__';
+  const NUKE_KEY = '__sw_nuke_2026_06_08_pickup_hold_release__';
   if (!localStorage.getItem(NUKE_KEY)) {
     localStorage.setItem(NUKE_KEY, '1');
     if (window.caches && caches.keys) {

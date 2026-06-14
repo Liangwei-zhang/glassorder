@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260609-pickup-hold-release">
+<link rel="stylesheet" href="shared.css?v=20260608-pickup-hold-release">
 </head>
 <body>
 <div class="topbar">
@@ -28,27 +28,39 @@
     <div id="customerPicker"></div>
   </div>
   <div id="available"></div>
-  <div class="card signature-card" id="signatureCard" style="display:none;">
-    <div class="pickup-signature-intro" id="signatureIntro"></div>
-    <label class="form-label" data-i18n="signerName">取货人姓名</label>
-    <input class="form-input" id="name" data-i18n-placeholder="signerNamePh" placeholder="如: 张师傅">
-    <label class="form-label" style="margin-top:12px;" data-i18n="contactPhone">联系电话</label>
-    <input class="form-input" id="phone" data-i18n-placeholder="signerPhonePh" placeholder="可选">
-    <label class="form-label" style="margin-top:12px;" data-i18n="customerSignOptional">客户签名（可选）</label>
-    <canvas id="sig" class="sig-pad" style="margin-top:8px; height:180px;"></canvas>
-    <button class="btn btn-ghost" type="button" onclick="clearSig()" style="margin-top:8px; min-height:0; padding:8px 12px;" data-i18n="clearSig">清空</button>
+  <div class="card pickup-qr-card" id="qrCard" style="display:none;">
+    <div class="pickup-qr-head">
+      <div>
+        <div class="row-title" data-i18n="pickupQrTitle">客户扫码签字</div>
+        <div class="row-sub" id="qrIntro"></div>
+      </div>
+      <span class="badge badge-pickup" id="qrStatus" data-i18n="pickupQrWaiting">等待签字</span>
+    </div>
+    <div class="pickup-qr-body">
+      <div class="pickup-qr-box" id="qrBox"></div>
+      <div class="pickup-qr-copy">
+        <div class="row-title" data-i18n="pickupQrInstructionTitle">请客户用自己的手机扫码</div>
+        <div class="row-sub" data-i18n="pickupQrInstructionBody">客户手机只会看到本次签收信息和签名板，不会进入老板系统。</div>
+        <div class="pickup-qr-link" id="qrLink"></div>
+        <div class="pickup-qr-countdown" id="qrCountdown"></div>
+        <div class="pickup-qr-actions">
+          <button class="btn btn-ghost btn-inline-compact" type="button" onclick="copySignLink()" data-i18n="copySignLink">复制链接</button>
+          <button class="btn btn-ghost btn-inline-compact" type="button" onclick="cancelSignRequest(event)" data-i18n="cancelQrSign">取消二维码</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <div class="action-bar">
   <a class="btn btn-ghost back" href="pickup-batches.html" data-i18n="back">返回</a>
-  <button class="btn btn-success" id="submitBtn" onclick="submitBatch(event)">
-    <span id="selectedSummary" data-i18n="pickupConfirmBtn">确认取货</span>
+  <button class="btn btn-success" id="submitBtn" onclick="createSignRequest(event)">
+    <span id="selectedSummary" data-i18n="pickupQrCreateBtn">生成签字二维码</span>
   </button>
 </div>
 
-<script src="js/api.js?v=20260609-pickup-hold-release"></script>
-<script src="js/i18n.js?v=20260609-pickup-hold-release"></script>
+<script src="js/api.js?v=20260608-pickup-hold-release"></script>
+<script src="js/i18n.js?v=20260608-pickup-hold-release"></script>
 <script>
 const allowed = requireRolePage('boss');
 const params = new URLSearchParams(location.search);
@@ -58,7 +70,6 @@ const initialPo = params.get('po') || '';
 let customers = [];
 let grouped = [];
 let selected = new Set();
-let signatureEmpty = true;
 let customerPicker = null;
 let pendingInitialOrder = null;
 let orderFilterId = initialOrderId || '';
@@ -66,6 +77,10 @@ let activePoFilter = '';
 let activePoCustomerId = '';
 let lastHadPieces = false;
 let lastCustomerId = '';
+let availableRequestSeq = 0;
+let currentSignRequest = null;
+let signPollTimer = null;
+let signCountdownTimer = null;
 
 async function loadCustomers() {
   const [customerData, orderData] = await Promise.all([
@@ -150,20 +165,24 @@ function clearPickupPo() {
 }
 
 async function loadAvailable() {
+  const requestSeq = ++availableRequestSeq;
   selected.clear();
-  signatureEmpty = true;
-  clearSig();
+  clearSignRequestState();
   updatePickupFlow();
   const id = customerPicker ? customerPicker.getValue() : '';
   lastCustomerId = String(id || '');
   if (!id) {
+    grouped = [];
     document.getElementById('available').innerHTML = emptyState(t('customersEmpty'));
     return;
   }
+  grouped = [];
+  document.getElementById('available').innerHTML = emptyState(t('loading'));
   const query = new URLSearchParams({ customer_id: id });
   query.set('include_hold', '1');
   if (activePoFilter) query.set('po', activePoFilter);
   const data = await api('/api/pickups/available?' + query.toString());
+  if (requestSeq !== availableRequestSeq || String(customerPicker ? customerPicker.getValue() : '') !== String(id)) return;
   grouped = data.orders || [];
   renderAvailable();
 }
@@ -257,24 +276,26 @@ function pickupPieceById(id) {
 }
 
 function syncPickupChecks() {
+  const locked = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
   document.querySelectorAll('[data-piece]').forEach((input) => {
     const piece = pickupPieceById(input.dataset.piece);
     if (piece && piece.hold) selected.delete(Number(input.dataset.piece));
-    input.disabled = Boolean(piece && piece.hold);
+    input.disabled = locked || Boolean(piece && piece.hold);
     input.checked = !(piece && piece.hold) && selected.has(Number(input.dataset.piece));
   });
 }
 
 function updatePickupBulkButtons() {
+  const locked = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
   const visibleIds = visiblePickupPieceIds();
   const selectAllBtn = document.getElementById('pickupSelectAllBtn');
   const clearAllBtn = document.getElementById('pickupClearAllBtn');
   if (selectAllBtn) {
-    selectAllBtn.disabled = visibleIds.length === 0 || visibleIds.every((id) => selected.has(Number(id)));
+    selectAllBtn.disabled = locked || visibleIds.length === 0 || visibleIds.every((id) => selected.has(Number(id)));
     selectAllBtn.style.opacity = selectAllBtn.disabled ? '.5' : '';
   }
   if (clearAllBtn) {
-    clearAllBtn.disabled = selected.size === 0;
+    clearAllBtn.disabled = locked || selected.size === 0;
     clearAllBtn.style.opacity = clearAllBtn.disabled ? '.5' : '';
   }
 }
@@ -294,7 +315,7 @@ function togglePiece(id, on) {
   if (selected.size > 0 && !lastHadPieces) {
     lastHadPieces = true;
     requestAnimationFrame(() => {
-      const target = document.getElementById('signatureCard');
+      const target = document.getElementById('qrCard');
       if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   } else if (!selected.size) {
@@ -303,13 +324,15 @@ function togglePiece(id, on) {
 }
 
 function selectPickupIds(ids) {
-  ids.filter((id) => { const piece = pickupPieceById(id); return !piece || !piece.hold; }).forEach((id) => selected.add(Number(id)));
+  if (currentSignRequest && currentSignRequest.status === 'pending') return;
+  ids.forEach((id) => selected.add(Number(id)));
   lastHadPieces = selected.size > 0;
   syncPickupChecks();
   updatePickupFlow();
 }
 
 function clearPickupIds(ids) {
+  if (currentSignRequest && currentSignRequest.status === 'pending') return;
   ids.forEach((id) => selected.delete(Number(id)));
   lastHadPieces = selected.size > 0;
   syncPickupChecks();
@@ -321,6 +344,7 @@ function selectAllPickupVisible() {
 }
 
 function clearPickupSelection() {
+  if (currentSignRequest && currentSignRequest.status === 'pending') return;
   selected.clear();
   lastHadPieces = false;
   syncPickupChecks();
@@ -337,7 +361,6 @@ function clearPickupOrder(orderId) {
   clearPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
 }
 
-
 async function holdPickupOrder(orderId, hold, ev) {
   const ok = await confirmModal({
     title: hold ? t('holdOrderPickupConfirm') : t('unholdOrderPickupConfirm'),
@@ -345,124 +368,64 @@ async function holdPickupOrder(orderId, hold, ev) {
     confirmText: hold ? t('holdOrderPickupBtn') : t('unholdOrderPickupBtn'),
   });
   if (!ok) return;
-  const btn = ev && ev.currentTarget;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
   await withBusy(btn, async () => {
     const data = await api('/api/pickups/hold-order', {
       method: 'POST',
-      body: { order_id: Number(orderId), hold },
+      body: { order_id: orderId, hold },
     });
-    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
     await loadAvailable();
-  });
+    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
+  }).catch(err => toast(err.message, { type: 'danger' }));
 }
 
 async function holdPickupCustomer(hold, ev) {
-  const customerId = customerPicker ? customerPicker.getValue() : '';
-  if (!customerId) return;
+  const id = customerPicker ? customerPicker.getValue() : '';
+  if (!id) return toast(t('selectCustomer'), { type: 'danger' });
   const ok = await confirmModal({
     title: hold ? t('holdCustomerPickupConfirm') : t('unholdCustomerPickupConfirm'),
     body: hold ? t('holdCustomerPickupBody') : t('unholdPickupBody'),
     confirmText: hold ? t('holdCustomerPickupBtn') : t('unholdCustomerPickupBtn'),
   });
   if (!ok) return;
-  const btn = ev && ev.currentTarget;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
   await withBusy(btn, async () => {
     const data = await api('/api/pickups/hold-customer', {
       method: 'POST',
-      body: { customer_id: Number(customerId), hold },
+      body: { customer_id: id, hold },
     });
-    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
     await loadAvailable();
-  });
+    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
+  }).catch(err => toast(err.message, { type: 'danger' }));
 }
 
 function updatePickupFlow() {
   const hasCustomer = Boolean(customerPicker && customerPicker.getValue());
   const hasPieces = selected.size > 0;
-  const hasSignerName = Boolean(document.getElementById('name').value.trim());
+  const hasQr = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
   const steps = [
     { number: 1, label: t('pickupStepLookup'), done: hasCustomer },
     { number: 2, label: t('pickupStepPieces'), done: hasPieces },
-    { number: 3, label: t('pickupStepConfirm'), done: hasPieces && hasSignerName },
+    { number: 3, label: t('pickupStepQr'), done: hasQr },
   ];
   steps.forEach((step, index) => {
     step.active = !step.done && ((index === 0 && !hasCustomer) || (index === 1 && hasCustomer && !hasPieces) || (index === 2 && hasPieces));
   });
-  const note = selected.size ? tn('pickupSelectedHintN', { n: selected.size }) : '';
+  const note = selected.size ? tn('pickupQrSelectedHintN', { n: selected.size }) : '';
   const stepper = document.getElementById('pickupStepper');
   stepper.classList.toggle('with-note', selected.size > 0);
   stepper.innerHTML = renderPickupSteps(steps, note);
-  document.getElementById('signatureCard').style.display = hasPieces ? '' : 'none';
-  const intro = document.getElementById('signatureIntro');
-  if (intro) {
-    intro.textContent = hasPieces
-      ? tn('pickupSignatureOptionalHintN', { n: selected.size })
-      : '';
-  }
+  document.getElementById('qrCard').style.display = currentSignRequest ? '' : 'none';
   const summary = document.getElementById('selectedSummary');
   if (summary) {
-    summary.textContent = selected.size ? tn('pickupSelectedConfirmN', { n: selected.size }) : t('pickupConfirmBtn');
+    summary.textContent = t('pickupQrCreateBtn');
   }
+  const submitBtn = document.getElementById('submitBtn');
+  if (submitBtn) submitBtn.disabled = !selected.size || hasQr;
+  syncPickupChecks();
   updatePickupBulkButtons();
 }
 
-const canvas = document.getElementById('sig');
-const ctx = canvas.getContext('2d');
-let drawing = false, last = null;
-function resizeCanvas() {
-  const ratio = window.devicePixelRatio || 1;
-  const w = canvas.offsetWidth, h = canvas.offsetHeight;
-  if (!w || !h) return;
-  canvas.width = w * ratio;
-  canvas.height = h * ratio;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = '#18181b';
-  ctx.lineCap = 'round';
-}
-function pos(e) {
-  const r = canvas.getBoundingClientRect();
-  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
-  return { x: t.clientX - r.left, y: t.clientY - r.top };
-}
-function start(e) {
-  drawing = true;
-  last = pos(e);
-  if (canvas.setPointerCapture && e.pointerId !== undefined) {
-    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-  }
-  e.preventDefault();
-}
-function move(e) {
-  if (!drawing) return;
-  const p = pos(e);
-  ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-  last = p; signatureEmpty = false; updatePickupFlow(); e.preventDefault();
-}
-function end(e) {
-  drawing = false;
-  last = null;
-  if (canvas.releasePointerCapture && e && e.pointerId !== undefined) {
-    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-  }
-}
-function clearSig() { ctx.clearRect(0, 0, canvas.width, canvas.height); signatureEmpty = true; updatePickupFlow(); }
-resizeCanvas();
-window.addEventListener('resize', resizeCanvas);
-canvas.addEventListener('pointerdown', start);
-canvas.addEventListener('pointermove', move);
-canvas.addEventListener('pointerup', end);
-canvas.addEventListener('pointercancel', end);
-canvas.addEventListener('pointerleave', end);
-canvas.addEventListener('mousedown', start);
-canvas.addEventListener('mousemove', move);
-canvas.addEventListener('mouseup', end);
-canvas.addEventListener('mouseleave', end);
-canvas.addEventListener('touchstart', start, { passive:false });
-canvas.addEventListener('touchmove', move, { passive:false });
-canvas.addEventListener('touchend', end);
-canvas.addEventListener('touchcancel', end);
-document.getElementById('name').addEventListener('input', updatePickupFlow);
 document.getElementById('poSearch').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -472,43 +435,156 @@ document.getElementById('poSearch').addEventListener('keydown', (event) => {
   }
 });
 
-async function submitBatch(ev) {
-  const name = document.getElementById('name').value.trim();
+function clearSignTimers() {
+  if (signPollTimer) clearInterval(signPollTimer);
+  if (signCountdownTimer) clearInterval(signCountdownTimer);
+  signPollTimer = null;
+  signCountdownTimer = null;
+}
+
+function clearSignRequestState() {
+  clearSignTimers();
+  currentSignRequest = null;
+  const card = document.getElementById('qrCard');
+  if (card) card.style.display = 'none';
+}
+
+function renderSignRequest(request) {
+  currentSignRequest = request || currentSignRequest;
+  const req = currentSignRequest;
+  if (!req) return;
+  const card = document.getElementById('qrCard');
+  const box = document.getElementById('qrBox');
+  const link = document.getElementById('qrLink');
+  const intro = document.getElementById('qrIntro');
+  const status = document.getElementById('qrStatus');
+  if (card) card.style.display = '';
+  if (box && req.qr_svg) box.innerHTML = req.qr_svg;
+  if (link && req.sign_url) link.textContent = req.sign_url;
+  if (intro) intro.textContent = tn('pickupQrIntroN', { n: req.total_pieces || selected.size });
+  if (status) {
+    status.textContent = req.status === 'signed' ? t('pickupQrSigned') : req.status === 'cancelled' ? t('pickupQrCancelled') : req.status === 'expired' ? t('pickupQrExpired') : t('pickupQrWaiting');
+    status.className = `badge ${req.status === 'signed' ? 'badge-done' : req.status === 'pending' ? 'badge-pickup' : 'badge-warn'}`;
+  }
+  renderQrCountdown();
+  updatePickupFlow();
+}
+
+function renderQrCountdown() {
+  const el = document.getElementById('qrCountdown');
+  if (!el || !currentSignRequest) return;
+  const seconds = Number(currentSignRequest.seconds_remaining || 0);
+  if (currentSignRequest.status !== 'pending') {
+    el.textContent = currentSignRequest.status === 'signed' ? t('pickupQrSignedBody') : t('pickupQrInactiveBody');
+    return;
+  }
+  const min = Math.floor(seconds / 60);
+  const sec = String(seconds % 60).padStart(2, '0');
+  el.textContent = tn('pickupQrExpiresIn', { time: `${min}:${sec}` });
+}
+
+function startSignPolling() {
+  clearSignTimers();
+  signCountdownTimer = setInterval(() => {
+    if (!currentSignRequest || currentSignRequest.status !== 'pending') return;
+    currentSignRequest.seconds_remaining = Math.max(0, Number(currentSignRequest.seconds_remaining || 0) - 1);
+    renderQrCountdown();
+  }, 1000);
+  signPollTimer = setInterval(async () => {
+    if (!currentSignRequest || currentSignRequest.status !== 'pending') return;
+    try {
+      const data = await api('/api/pickups/sign-requests/' + currentSignRequest.id);
+      currentSignRequest = { ...currentSignRequest, ...data.request };
+      renderSignRequest(currentSignRequest);
+      if (currentSignRequest.status === 'signed' && currentSignRequest.pickup_batch_id) {
+        clearSignTimers();
+        toast(t('pickupQrSigned'), { type: 'success' });
+        window.setTimeout(() => {
+          location.href = 'pickup-batch-detail.html?id=' + currentSignRequest.pickup_batch_id;
+        }, 650);
+      } else if (currentSignRequest.status !== 'pending') {
+        clearSignTimers();
+        toast(t('pickupQrInactiveBody'), { type: 'danger' });
+      }
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  }, 2500);
+}
+
+async function createSignRequest(ev) {
   if (!selected.size) return toast(t('selectFirst'), { type:'danger' });
-  if (!name) return toast(t('sigEmptyName'), { type:'danger' });
   const ok = await confirmModal({
-    title: tn('pickupConfirmTitle', { name }),
-    body: tn('pickupBatchConfirmBody', { n: selected.size }),
-    confirmText: t('pickupConfirmCta'),
+    title: t('pickupQrConfirmTitle'),
+    body: tn('pickupQrConfirmBodyN', { n: selected.size }),
+    confirmText: t('pickupQrCreateBtn'),
   });
   if (!ok) return;
   const btn = ev && ev.currentTarget;
   await withBusy(btn, async () => {
-    const body = {
-      piece_ids: [...selected],
-      signer_name: name,
-      signer_phone: document.getElementById('phone').value.trim(),
-    };
-    if (!signatureEmpty) body.signature_base64 = canvas.toDataURL('image/png');
-    const data = await api('/api/pickups/batches', {
+    clearSignRequestState();
+    const data = await api('/api/pickups/sign-requests', {
       method: 'POST',
-      body,
+      body: { piece_ids: [...selected] },
     });
-    location.href = 'pickup-batch-detail.html?id=' + data.batch.id;
-  });
+    currentSignRequest = data.request;
+    renderSignRequest(currentSignRequest);
+    startSignPolling();
+    requestAnimationFrame(() => document.getElementById('qrCard').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }).catch(err => toast(err.message, { type:'danger' }));
 }
 
-function onLangChange() { renderAvailable(); updatePickupFlow(); }
+async function cancelSignRequest(ev) {
+  if (!currentSignRequest || currentSignRequest.status !== 'pending') return;
+  const ok = await confirmModal({
+    title: t('cancelQrSignConfirm'),
+    body: t('cancelQrSignBody'),
+    confirmText: t('cancelQrSign'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/sign-requests/' + currentSignRequest.id + '/cancel', {
+      method: 'POST',
+      body: { reason: 'boss_cancelled' },
+    });
+    currentSignRequest = { ...currentSignRequest, ...data.request };
+    renderSignRequest(currentSignRequest);
+    clearSignTimers();
+  }).catch(err => toast(err.message, { type:'danger' }));
+}
+
+async function copySignLink() {
+  if (!currentSignRequest || !currentSignRequest.sign_url) return;
+  try {
+    await navigator.clipboard.writeText(currentSignRequest.sign_url);
+    toast(t('copied'), { type:'success' });
+  } catch (err) {
+    const link = document.getElementById('qrLink');
+    if (link) {
+      const range = document.createRange();
+      range.selectNodeContents(link);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    toast(t('copyManually'), { type:'info' });
+  }
+}
+
+window.addEventListener('beforeunload', clearSignTimers);
+
+function onLangChange() {
+  renderAvailable();
+  renderSignRequest(currentSignRequest);
+  updatePickupFlow();
+}
 if (allowed) {
   customerPicker = initCustomerPicker({
     root: '#customerPicker',
     customers: [],
     placeholder: t('customerSearchPlaceholder'),
     onSelect: (customer) => {
-      if (String(customer.id) !== String(lastCustomerId)) {
-        document.getElementById('name').value = '';
-        document.getElementById('phone').value = '';
-      }
       if (pendingInitialOrder && String(customer.id) !== String(pendingInitialOrder.customer_id)) {
         orderFilterId = '';
         activePoFilter = '';

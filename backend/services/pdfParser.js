@@ -22,6 +22,7 @@ function normalizeDimension(value) {
 }
 
 function parseCover(text) {
+  const lines = cleanLines(text);
   const totalMatch = text.match(/Total\s+of\s+(\d+)\s+Panel\(s\)\s+in\s+this\s+Order/i);
   const projectMatch = text.match(/Project\s+Name:\s*(.+)/i);
   const projectName = projectMatch ? projectMatch[1].trim() : null;
@@ -31,7 +32,24 @@ function parseCover(text) {
     total: totalMatch ? Number(totalMatch[1]) : null,
     projectName,
     orderNumber: orderNumberMatch ? orderNumberMatch[1] : null,
+    location: locationFromLines(lines),
   };
+}
+
+function locationFromLines(lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(/^Location:\s*(.*)$/i);
+    if (!match) continue;
+    const inline = match[1].trim();
+    if (inline) return inline;
+    for (let j = i + 1; j < Math.min(lines.length, i + 4); j += 1) {
+      const candidate = lines[j].trim();
+      if (!candidate) continue;
+      if (/^(Project #:?|Supplier:|Address:|Total (Area|Weight):|Page \d+)/i.test(candidate)) break;
+      return candidate;
+    }
+  }
+  return '';
 }
 
 function noteFromLines(lines, sizeLineIndex) {
@@ -64,7 +82,7 @@ function noteFromLines(lines, sizeLineIndex) {
   return [...new Set(notes)].join(' · ');
 }
 
-function parsePiecePage(pageText, pageNumber) {
+function parsePiecePage(pageText, pageNumber, defaultLocation = '') {
   const lines = cleanLines(pageText);
   const qtyIndex = lines.findIndex((line) => /^(\d+)\s+ea$/i.test(line));
   const qty = qtyIndex >= 0 ? Number(lines[qtyIndex].match(/^(\d+)\s+ea$/i)[1]) : 1;
@@ -86,6 +104,7 @@ function parsePiecePage(pageText, pageNumber) {
     type: materialMatch[2].trim(),
     size: `${normalizeDimension(sizeMatch[1])} × ${normalizeDimension(sizeMatch[2])}`,
     weight: sizeMatch[3],
+    tag: locationFromLines(lines) || defaultLocation,
     piece_note: noteFromLines(lines, sizeLineIndex),
   };
 }
@@ -93,6 +112,23 @@ function parsePiecePage(pageText, pageNumber) {
 function convertPages(pdfPath, outputDir) {
   fs.mkdirSync(outputDir, { recursive: true });
   run('pdftocairo', ['-jpeg', '-r', '144', pdfPath, path.join(outputDir, 'page')]);
+}
+
+function convertedPageImage(outputDir, pageNumber) {
+  const candidates = [
+    `page-${pageNumber}.jpg`,
+    `page-${String(pageNumber).padStart(2, '0')}.jpg`,
+    `page-${String(pageNumber).padStart(3, '0')}.jpg`,
+    `page-${String(pageNumber).padStart(4, '0')}.jpg`,
+  ];
+  for (const filename of candidates) {
+    const file = path.join(outputDir, filename);
+    if (fs.existsSync(file)) return file;
+  }
+  const prefix = `page-${pageNumber}`;
+  const found = fs.readdirSync(outputDir)
+    .find((name) => name === `${prefix}.jpg` || name.match(new RegExp(`^page-0+${pageNumber}\\.jpg$`)));
+  return found ? path.join(outputDir, found) : '';
 }
 
 function publicPath(publicBase, filename) {
@@ -112,10 +148,10 @@ function parsePdf(pdfPath, options = {}) {
   const pieces = [];
   for (let pageIndex = 1; pageIndex < pages.length; pageIndex += 1) {
     const pageNumber = pageIndex + 1;
-    const block = parsePiecePage(pages[pageIndex], pageNumber);
+    const block = parsePiecePage(pages[pageIndex], pageNumber, cover.location);
     if (!block) continue;
 
-    const pageImage = path.join(outputDir, `page-${pageNumber}.jpg`);
+    const pageImage = convertedPageImage(outputDir, pageNumber);
     for (let copy = 0; copy < block.qty; copy += 1) {
       const pieceNo = pieces.length + 1;
       const pieceImageName = `piece${pieceNo}.jpg`;
@@ -133,6 +169,7 @@ function parsePdf(pdfPath, options = {}) {
         type: block.type,
         thickness: block.thickness,
         weight: block.weight,
+        tag: block.tag,
         piece_note: block.piece_note,
         drawing_path: publicPath(publicBase, pieceImageName),
         source_page: block.pageNumber,
@@ -150,4 +187,19 @@ function parsePdf(pdfPath, options = {}) {
   };
 }
 
-module.exports = { parsePdf };
+function extractPieceTagsFromPdf(pdfPath) {
+  const text = run('pdftotext', [pdfPath, '-']);
+  const pages = text.split('\f');
+  const cover = parseCover(pages[0] || text);
+  const tags = [];
+  for (let pageIndex = 1; pageIndex < pages.length; pageIndex += 1) {
+    const block = parsePiecePage(pages[pageIndex], pageIndex + 1, cover.location);
+    if (!block) continue;
+    for (let copy = 0; copy < block.qty; copy += 1) {
+      tags.push(block.tag || cover.location || '');
+    }
+  }
+  return tags;
+}
+
+module.exports = { parsePdf, extractPieceTagsFromPdf };

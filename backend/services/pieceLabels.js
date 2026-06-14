@@ -31,7 +31,38 @@ const WORKFLOW_CODES = {
   polish: 'CPOLISH',
   finished: 'CFIN',
 };
-const SHAPE_PREVIEW_VERSION = 'v2';
+const SHAPE_PREVIEW_VERSION = 'v10-dark';
+const PT_PER_MM = 72 / 25.4;
+const BASE_LABEL = { width: 288, height: 432 };
+const LABEL_SIZES = {
+  '100x150': {
+    key: '100x150',
+    label: '100mm x 150mm',
+    width: 100 * PT_PER_MM,
+    height: 150 * PT_PER_MM,
+    layout: 'large',
+  },
+  '80x60': {
+    key: '80x60',
+    label: '80mm x 60mm',
+    width: 80 * PT_PER_MM,
+    height: 60 * PT_PER_MM,
+    layout: 'compact',
+  },
+};
+const DEFAULT_LABEL_SIZE = '100x150';
+
+function normalizeLabelSize(value) {
+  const raw = cleanText(value).toLowerCase();
+  if (!raw) return DEFAULT_LABEL_SIZE;
+  const key = raw.replace(/mm/g, '').replace(/[×*]/g, 'x').replace(/\s+/g, '');
+  return LABEL_SIZES[key] ? key : '';
+}
+
+function resolveLabelSize(value) {
+  const key = normalizeLabelSize(value) || DEFAULT_LABEL_SIZE;
+  return LABEL_SIZES[key];
+}
 
 function poLabel(value) {
   const code = String(value || '').trim();
@@ -44,9 +75,12 @@ function cleanText(value, fallback = '') {
 }
 
 function compactText(value, limit) {
-  const text = cleanText(value);
-  if (!text || text.length <= limit) return text;
-  return `${text.slice(0, Math.max(1, limit - 3))}...`;
+  return cleanText(value);
+}
+
+function poDisplayText(orderCode) {
+  const text = cleanText(orderCode);
+  return `PO: ${text || '-'}`;
 }
 
 function safeBarcodeText(value) {
@@ -77,7 +111,7 @@ function workflowCodes(piece) {
       codes.push(code);
     }
   }
-  for (const code of ['CPACKING', 'CSHIPPING']) {
+  for (const code of ['CPACKING']) {
     if (!seen.has(code)) codes.push(code);
   }
   return codes;
@@ -118,6 +152,14 @@ function metricSize(size) {
   return `${Math.round(a * 25.4)}mm x ${Math.round(b * 25.4)}mm`;
 }
 
+function isHorizontalSize(size) {
+  const parts = cleanText(size).split(/\s*[x×]\s*/i);
+  if (parts.length !== 2) return false;
+  const a = parseInches(parts[0]);
+  const b = parseInches(parts[1]);
+  return Number.isFinite(a) && Number.isFinite(b) && a > b * 1.15;
+}
+
 function weightText(weight) {
   const text = cleanText(weight);
   if (!text) return '-- LBS';
@@ -125,6 +167,55 @@ function weightText(weight) {
     .replace(/\blbs?\b/ig, 'LBS')
     .replace(/\s+/g, ' ')
     .toUpperCase();
+}
+
+function marksText(piece) {
+  const note = cleanText(piece && piece.piece_note);
+  const markMatch = note.match(/(?:^|[·•])\s*Marks?\s*:\s*([^·•]+)/i);
+  const mark = markMatch ? cleanText(markMatch[1]).replace(/[.,;]+$/g, '') : '';
+  if (mark) return mark;
+  const fallback = cleanText(piece && piece.piece_no, '-');
+  return fallback === '-' ? '-' : `P${fallback}`;
+}
+
+async function darkenPreviewBuffer(buffer) {
+  if (!sharp || !buffer) return buffer;
+  try {
+    const { data, info } = await sharp(buffer)
+      .flatten({ background: '#ffffff' })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const width = info.width;
+    const height = info.height;
+    const dark = new Uint8Array(width * height);
+    for (let i = 0; i < data.length; i += 1) {
+      if (data[i] < 232) dark[i] = 1;
+    }
+    const output = Buffer.alloc(width * height, 255);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const idx = (y * width) + x;
+        if (!dark[idx]) continue;
+        for (let ny = Math.max(0, y - 1); ny <= Math.min(height - 1, y + 1); ny += 1) {
+          for (let nx = Math.max(0, x - 1); nx <= Math.min(width - 1, x + 1); nx += 1) {
+            output[(ny * width) + nx] = 0;
+          }
+        }
+      }
+    }
+    return sharp(output, {
+      raw: {
+        width,
+        height,
+        channels: 1,
+      },
+    })
+      .png()
+      .toBuffer();
+  } catch (err) {
+    return buffer;
+  }
 }
 
 function uploadPathToFile(publicPath, uploadsBase) {
@@ -153,13 +244,13 @@ function expandBounds(bounds, width, height) {
 }
 
 function findShapeBoundsFromRaw(data, width, height) {
-  const minX = Math.floor(width * 0.08);
-  const maxX = Math.ceil(width * 0.92);
-  const minY = Math.floor(height * 0.16);
-  const maxY = Math.ceil(height * 0.93);
+  const minX = Math.floor(width * 0.04);
+  const maxX = Math.ceil(width * 0.96);
+  const minY = Math.floor(height * 0.12);
+  const maxY = Math.ceil(height * 0.92);
   const visited = new Uint8Array(width * height);
-  const isDark = (idx) => data[idx] < 220;
-  let best = null;
+  const isDark = (idx) => data[idx] < 218;
+  let primary = null;
   let fallback = null;
 
   for (let y = minY; y < maxY; y += 1) {
@@ -199,9 +290,6 @@ function findShapeBoundsFromRaw(data, width, height) {
       }
 
       if (count < 16) continue;
-      const boxWidth = right - left + 1;
-      const boxHeight = bottom - top + 1;
-      const component = { left, right, top, bottom, count, score: (boxWidth * boxHeight) + (count * 8) };
       if (!fallback) fallback = { left, right, top, bottom };
       else {
         fallback.left = Math.min(fallback.left, left);
@@ -209,22 +297,36 @@ function findShapeBoundsFromRaw(data, width, height) {
         fallback.top = Math.min(fallback.top, top);
         fallback.bottom = Math.max(fallback.bottom, bottom);
       }
-      if (boxWidth > width * 0.12 && boxHeight > height * 0.18 && count > 80) {
-        if (!best || component.score > best.score) best = component;
+
+      const boxWidth = right - left + 1;
+      const boxHeight = bottom - top + 1;
+      const area = boxWidth * boxHeight;
+      const aspect = boxWidth / Math.max(1, boxHeight);
+      const looksLikeShape = (
+        boxWidth > width * 0.12
+        && boxHeight > height * 0.12
+        && aspect > 0.12
+        && aspect < 8
+        && count > 80
+      );
+      if (looksLikeShape) {
+        const score = area + (count * 12);
+        if (!primary || score > primary.score) primary = { left, right, top, bottom, score };
       }
     }
   }
 
-  const bounds = best || fallback;
-  if (!bounds) return null;
+  const bounds = primary || fallback;
+  if (!bounds || bounds.right <= bounds.left || bounds.bottom <= bounds.top) return null;
   return expandBounds(bounds, width, height);
 }
 
-async function createShapePreview(sourceFile, uploadsBase) {
+async function createShapePreview(piece, sourceFile, uploadsBase) {
   if (!sharp || !sourceFile || !fs.existsSync(sourceFile)) return '';
   const stat = fs.statSync(sourceFile);
   const hash = crypto.createHash('sha1')
     .update(SHAPE_PREVIEW_VERSION)
+    .update(cleanText(piece && piece.size))
     .update(path.resolve(sourceFile))
     .update(String(stat.size))
     .update(String(stat.mtimeMs))
@@ -259,18 +361,30 @@ async function createShapePreview(sourceFile, uploadsBase) {
     crop.width = Math.min(crop.width, metadata.width - crop.left);
     crop.height = Math.min(crop.height, metadata.height - crop.top);
     if (crop.width < 24 || crop.height < 24) return '';
-    await sharp(sourceFile)
+    let previewBuffer = await sharp(sourceFile)
       .rotate()
       .extract(crop)
+      .flatten({ background: '#ffffff' })
+      .png()
+      .toBuffer();
+    if (isHorizontalSize(piece && piece.size) || (!cleanText(piece && piece.size) && crop.width > crop.height * 1.15)) {
+      previewBuffer = await sharp(previewBuffer)
+        .rotate(90, { background: '#ffffff' })
+        .flatten({ background: '#ffffff' })
+        .png()
+        .toBuffer();
+    }
+    previewBuffer = await sharp(previewBuffer)
       .resize({
-        width: 180,
-        height: 300,
-        fit: 'contain',
-        background: '#ffffff',
+        width: 720,
+        height: 720,
+        fit: 'inside',
         withoutEnlargement: false,
       })
       .png()
-      .toFile(outputPath);
+      .toBuffer();
+    previewBuffer = await darkenPreviewBuffer(previewBuffer);
+    await sharp(previewBuffer).png().toFile(outputPath);
     return outputPath;
   } catch (err) {
     return '';
@@ -279,7 +393,7 @@ async function createShapePreview(sourceFile, uploadsBase) {
 
 async function preparePieceLabelData(piece, uploadsBase) {
   const sourceFile = uploadPathToFile(piece.drawing_path, uploadsBase);
-  const shapePreviewPath = await createShapePreview(sourceFile, uploadsBase);
+  const shapePreviewPath = await createShapePreview(piece, sourceFile, uploadsBase);
   return {
     ...piece,
     label_shape_preview_path: shapePreviewPath,
@@ -321,7 +435,7 @@ function drawCode128(doc, text, x, y, width, height) {
 }
 
 function line(doc, x1, y1, x2, y2, width = 0.8) {
-  doc.save().lineWidth(width).strokeColor('#111').moveTo(x1, y1).lineTo(x2, y2).stroke().restore();
+  doc.save().lineWidth(width).strokeColor('#000').moveTo(x1, y1).lineTo(x2, y2).stroke().restore();
 }
 
 function drawFabFlag(doc, x, y) {
@@ -342,11 +456,21 @@ function drawFitText(doc, text, x, y, options) {
   for (let size = max; size >= min; size -= 1) {
     doc.fontSize(size);
     if (doc.heightOfString(text, { width }) <= height) {
-      doc.text(text, x, y, { width, height, ellipsis: true });
+      doc.text(text, x, y, { width, height });
       return;
     }
   }
-  doc.fontSize(min).text(text, x, y, { width, height, ellipsis: true });
+  doc.fontSize(min);
+  const textHeight = Math.max(1, doc.heightOfString(text, { width }));
+  if (textHeight > height) {
+    doc.save();
+    doc.translate(x, y);
+    doc.scale(1, height / textHeight);
+    doc.text(text, 0, 0, { width });
+    doc.restore();
+    return;
+  }
+  doc.text(text, x, y, { width, height });
 }
 
 function drawSingleLineFit(doc, text, x, y, options) {
@@ -364,87 +488,116 @@ function drawSingleLineFit(doc, text, x, y, options) {
   }
   doc.save();
   doc.rect(x, y - 1, width, height).clip();
-  doc.fontSize(chosen).text(text, x, y, { lineBreak: false });
+  doc.fontSize(chosen);
+  const textWidth = Math.max(1, doc.widthOfString(text));
+  if (textWidth > width) {
+    doc.translate(x, y);
+    doc.scale(width / textWidth, 1);
+    doc.text(text, 0, 0, { lineBreak: false });
+  } else {
+    doc.text(text, x, y, { lineBreak: false });
+  }
   doc.restore();
 }
 
-function drawPieceLabel(doc, { order, piece, uploadsBase }) {
+function labelCompanyName() {
+  return cleanText(process.env.LABEL_COMPANY_NAME || process.env.COMPANY_NAME || 'SUNSHINE TEMPERED GLASS');
+}
+
+function drawShapePreview(doc, piece, uploadsBase, x, y, fit, fallback = {}) {
+  const previewFile = uploadPathToFile(piece.drawing_path, uploadsBase);
+  const shapePreviewFile = piece.label_shape_preview_path || '';
+  const width = fallback.width || fit[0];
+  const textX = fallback.x || x;
+  const textY = fallback.y || (y + (fit[1] / 2) - 4);
+  doc.save();
+  if (shapePreviewFile && fs.existsSync(shapePreviewFile)) {
+    try {
+      doc.image(shapePreviewFile, x, y, { fit, align: 'center', valign: 'center' });
+      doc.restore();
+      return;
+    } catch (err) {
+      /* fall through to original drawing or fallback text */
+    }
+  }
+  if (previewFile && fs.existsSync(previewFile)) {
+    try {
+      doc.image(previewFile, x, y, { fit, align: 'center', valign: 'center' });
+      doc.restore();
+      return;
+    } catch (err) {
+      /* fall through to fallback text */
+    }
+  }
+  doc.fontSize(fallback.fontSize || 5.5).fillColor('#777').text('DRAWING', textX, textY, { width, align: 'center' });
+  doc.restore();
+}
+
+function drawLargePieceLabel(doc, { order, piece, uploadsBase, labelSpec }) {
   const left = 13;
   const top = 10;
   const right = 272;
   const rightX = 210;
   const labelCode = safeBarcodeText(`GO-${order.id}-${piece.id}-${piece.piece_no}`);
   const orderCode = cleanText(order.order_number);
-  const orderDisplay = compactText(orderCode, 18);
-  const shipDate = cleanText(order.deadline) || cleanText(order.created_at).slice(0, 10) || '-';
+  const orderDisplay = orderCode;
   const route = order.priority === 'rush' ? 'RUSH' : 'STANDARD';
   const size = cleanText(piece.size, '-');
   const metric = metricSize(size);
   const glassType = cleanText(piece.type, 'GLASS');
   const thickness = cleanText(piece.thickness);
   const note = cleanText(piece.piece_note);
+  const tag = cleanText(piece.tag);
+  const marks = marksText(piece);
   const shape = piece.drawing_path ? 'LIBRARY' : 'STANDARD';
+  const companyName = labelCompanyName().toUpperCase();
+  const scale = Math.min(labelSpec.width / BASE_LABEL.width, labelSpec.height / BASE_LABEL.height);
+  const offsetX = (labelSpec.width - (BASE_LABEL.width * scale)) / 2;
+  const offsetY = (labelSpec.height - (BASE_LABEL.height * scale)) / 2;
 
   doc.save();
-  doc.rect(0, 0, 288, 432).fill('#fff');
+  doc.translate(offsetX, offsetY).scale(scale);
+  doc.rect(0, 0, BASE_LABEL.width, BASE_LABEL.height).fill('#fff');
   doc.fillColor('#111').font('Helvetica');
 
-  drawSingleLineFit(doc.font('Helvetica'), `ORDER: ${orderDisplay || '-'}-${piece.piece_no}`, left, top, { width: 96, max: 9.5, min: 5.5 });
-  drawSingleLineFit(doc.font('Helvetica-Bold'), `PO: ${orderDisplay || '-'}`, 116, top - 1, { width: 86, max: 12, min: 5.5 });
-  drawSingleLineFit(doc.font('Helvetica'), `SHIP: ${shipDate}`, 210, top, { width: 62, max: 9.5, min: 5.5 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), poDisplayText(orderDisplay), left, top - 2, { width: 144, height: 20, max: 19, min: 5.5 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), marks, 160, top - 3, { width: 44, height: 18, max: 12.5, min: 6.5 });
+  drawSingleLineFit(doc.font('Helvetica'), `ORDER:${orderDisplay || '-'}-${piece.piece_no}`, 205, top + 2, { width: 69, height: 7, max: 5.8, min: 3.5 });
   drawSingleLineFit(doc.font('Helvetica'), `ROUTE:${route}`, left, 29, { width: 110, max: 9.5, min: 5.5 });
-  drawSingleLineFit(doc.font('Helvetica'), `REF:P${piece.piece_no} ${orderDisplay || '-'}`, 116, 29, { width: 122, max: 9.5, min: 5.5 });
+  drawSingleLineFit(doc.font('Helvetica'), `REF:P${piece.piece_no} ${orderDisplay || '-'}`, 116, 29, { width: 88, max: 8.5, min: 4.8 });
 
   drawFitText(doc.font('Helvetica-Bold'), cleanText(order.company, 'CUSTOMER').toUpperCase(), left, 52, {
-    width: 184,
+    width: 190,
     height: 34,
-    max: 23,
-    min: 13,
+    max: 17,
+    min: 7,
   });
   line(doc, left, 88, 205, 88, 1.1);
 
-  drawSingleLineFit(doc.font('Helvetica'), cleanText(thickness ? `${thickness} ${glassType}` : glassType).toUpperCase(), left, 94, { width: 108, height: 10, max: 8.8, min: 5.8 });
-  doc.font('Helvetica').fontSize(9).text('SHAPE:', 126, 94, { width: 34, lineBreak: false });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), cleanText(thickness ? `${thickness} ${glassType}` : glassType).toUpperCase(), left, 94, { width: 108, height: 10, max: 9, min: 6 });
+  doc.font('Helvetica').fontSize(9).text('SHAPE:', 124, 94, { width: 32, lineBreak: false });
   doc.save();
-  doc.rect(161, 90, 62, 15).fill('#111');
-  drawSingleLineFit(doc.fillColor('#fff').font('Helvetica-Bold'), shape, 165, 94, { width: 54, height: 8, max: 8.5, min: 6 });
+  doc.rect(157, 90, 48, 15).fill('#111');
+  drawSingleLineFit(doc.fillColor('#fff').font('Helvetica-Bold'), shape, 160, 94, { width: 42, height: 8, max: 7.8, min: 5.2 });
   doc.restore();
   doc.fillColor('#111').font('Helvetica-Bold');
 
   doc.fontSize(32).text(String(piece.piece_no || ''), left, 122, { width: 42, height: 36 });
-  drawFitText(doc, size, 56, 124, { width: 138, height: 36, max: 24, min: 12 });
-  doc.font('Helvetica').fontSize(11).text(metric || ' ', left, 166, { width: 120 });
+  drawFitText(doc, size, 56, 124, { width: 138, height: 36, max: 18, min: 8 });
+  doc.font('Helvetica-Bold').fontSize(11).text(metric || ' ', left, 166, { width: 120 });
   doc.font('Helvetica').fontSize(16).text('Glaze In', 136, 154, { width: 72, align: 'center', lineBreak: false });
   doc.font('Helvetica-Bold').fontSize(8).text('>>', left, 184, { width: 24, lineBreak: false });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `Tag: ${tag || '-'}`, 37, 184, { width: 168, height: 10, max: 10, min: 5 });
 
-  doc.font('Helvetica').fontSize(8.4).text(note || 'No special fabrication notes.', left, 198, {
+  doc.font('Helvetica-Bold').fontSize(8.2).text(note || 'No special fabrication notes.', left, 198, {
     width: 178,
     height: 76,
-    ellipsis: true,
     lineGap: 1.1,
   });
 
-  const previewFile = uploadPathToFile(piece.drawing_path, uploadsBase);
-  const shapePreviewFile = piece.label_shape_preview_path || '';
-  doc.save();
-  if (shapePreviewFile && fs.existsSync(shapePreviewFile)) {
-    try {
-      doc.image(shapePreviewFile, 224, 56, { fit: [44, 86], align: 'center', valign: 'center' });
-    } catch (err) {
-      doc.fontSize(5.5).fillColor('#777').text('DRAWING', 230, 102, { width: 30, align: 'center' });
-    }
-  } else if (previewFile && fs.existsSync(previewFile)) {
-    try {
-      doc.image(previewFile, 224, 56, { fit: [44, 86], align: 'center', valign: 'center' });
-    } catch (err) {
-      doc.fontSize(5.5).fillColor('#777').text('DRAWING', 230, 102, { width: 30, align: 'center' });
-    }
-  } else {
-    doc.fontSize(5.5).fillColor('#777').text('DRAWING', 230, 102, { width: 30, align: 'center' });
-  }
-  doc.restore();
+  drawShapePreview(doc, piece, uploadsBase, 205, 38, [70, 110], { x: 220, y: 96, width: 42 });
 
-  doc.font('Helvetica').fontSize(10.5).text('WEIGHT', rightX, 154, { width: 62, align: 'right' });
+  doc.font('Helvetica-Bold').fontSize(10.5).text('WEIGHT', rightX, 154, { width: 62, align: 'right' });
   line(doc, rightX, 170, right, 170, 1.1);
   drawFitText(doc.font('Helvetica-Bold'), weightText(piece.weight), rightX - 2, 178, { width: 64, height: 22, max: 15, min: 9 });
   line(doc, rightX, 205, right, 205, 1.1);
@@ -456,32 +609,108 @@ function drawPieceLabel(doc, { order, piece, uploadsBase }) {
   });
 
   doc.font('Helvetica').fontSize(6.8).text(`TM/CNC:${labelCode}`, left, 292, { width: 176, lineBreak: false });
-  doc.font('Helvetica').fontSize(8.5).text(`SHIP: ${shipDate}`, left, 314, { width: 96 });
-  drawSingleLineFit(doc.font('Helvetica-Bold'), `CUT: ${compactText(orderCode || '-', 15) || '-'} / ${piece.piece_no}`, left, 338, { width: 118, height: 20, max: 16, min: 8 });
+  doc.font('Helvetica-Bold').fontSize(8.5).text(`ROUTE: ${route}`, left, 314, { width: 96 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `CUT: ${orderCode || '-'} / ${piece.piece_no}`, left, 338, { width: 118, height: 20, max: 16, min: 5 });
   drawFabFlag(doc, 142, 309);
   doc.font('Helvetica').fontSize(11).text('FAB', 145, 338, { width: 34 });
-  doc.fontSize(7.4).text('RACK/SLOT', 182, 343, { width: 42, lineBreak: false });
+  doc.font('Helvetica-Bold').fontSize(7.4).text('RACK/SLOT', 182, 343, { width: 42, lineBreak: false });
   line(doc, 225, 349, right, 349, 1.1);
 
   drawCode128(doc, labelCode, 96, 372, 146, 34);
-  drawSingleLineFit(doc.font('Helvetica'), `PO: ${orderCode || '-'}`, left, 411, { width: 78, height: 8, max: 5.2, min: 4 });
-  doc.font('Helvetica-Bold').fontSize(9.5).text(`SUMP: ${labelCode}`, 91, 409, { width: 160, align: 'center' });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `PO: ${orderCode || '-'}`, left, 411, { width: 62, height: 8, max: 5.5, min: 4 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `SUMP: ${labelCode}`, 78, 411, { width: 105, height: 8, max: 7.2, min: 4 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), companyName, 188, 411, { width: 84, height: 8, max: 5.6, min: 3.7 });
   doc.restore();
 }
 
-async function createPieceLabelsPdf({ order, pieces, outputPath, uploadsBase }) {
+function drawCompactPieceLabel(doc, { order, piece, uploadsBase, labelSpec }) {
+  const w = labelSpec.width;
+  const h = labelSpec.height;
+  const left = 7;
+  const right = w - 7;
+  const labelCode = safeBarcodeText(`GO-${order.id}-${piece.id}-${piece.piece_no}`);
+  const orderCode = cleanText(order.order_number);
+  const orderDisplay = orderCode;
+  const route = order.priority === 'rush' ? 'RUSH' : 'STANDARD';
+  const size = cleanText(piece.size, '-');
+  const metric = metricSize(size);
+  const glassType = cleanText(piece.type, 'GLASS');
+  const thickness = cleanText(piece.thickness);
+  const note = cleanText(piece.piece_note);
+  const tag = cleanText(piece.tag);
+  const marks = marksText(piece);
+  const shape = piece.drawing_path ? 'LIBRARY' : 'STANDARD';
+  const companyName = labelCompanyName().toUpperCase();
+  const codes = workflowCodes(piece);
+
+  doc.save();
+  doc.rect(0, 0, w, h).fill('#fff');
+  doc.fillColor('#111').font('Helvetica');
+
+  drawSingleLineFit(doc.font('Helvetica-Bold'), poDisplayText(orderDisplay), left, 5, { width: 116, height: 14, max: 15.5, min: 4 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), marks, 126, 3, { width: 32, height: 16, max: 12.5, min: 6.5 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `ORDER:${orderDisplay || '-'}-${piece.piece_no}`, 162, 8, { width: right - 162, height: 8, max: 7, min: 5.2 });
+
+  drawFitText(doc.font('Helvetica-Bold'), cleanText(order.company, 'CUSTOMER').toUpperCase(), left, 24, {
+    width: 150,
+    height: 24,
+    max: 9.5,
+    min: 5,
+  });
+
+  drawShapePreview(doc, piece, uploadsBase, 158, 18, [66, 70], { x: 171, y: 48, width: 42, fontSize: 4 });
+
+  drawSingleLineFit(doc.font('Helvetica-Bold'), cleanText(thickness ? `${thickness} ${glassType}` : glassType).toUpperCase(), left, 52, { width: 96, height: 9, max: 8, min: 6.2 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `SHAPE:${shape}`, 104, 52, { width: 56, height: 9, max: 7.8, min: 6.2 });
+
+  drawFitText(doc.font('Helvetica-Bold'), size, left, 66, { width: 132, height: 23, max: 12, min: 5 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), metric || ' ', left, 91, { width: 120, height: 9, max: 7, min: 5.8 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `WEIGHT: ${weightText(piece.weight)}`, 132, 91, { width: 88, height: 9, max: 7, min: 5.6 });
+
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `Tag: ${tag || '-'}`, left, 101, { width: 142, height: 9, max: 9, min: 6 });
+  drawFitText(doc.font('Helvetica-Bold'), note || 'No special fabrication notes.', left, 111, {
+    width: 150,
+    height: 15,
+    max: 6.6,
+    min: 5.6,
+  });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `WORKFLOW: ${codes.join(' / ')}`, left, 128, { width: right - left, height: 10, max: 7.4, min: 5.7 });
+  line(doc, left, 139, right, 139, 0.9);
+
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `TM/CNC:${labelCode}`, left, 142, { width: 76, height: 8, max: 5.8, min: 5.1 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `CUT: ${orderCode || '-'} / ${piece.piece_no}`, 86, 141, { width: 75, height: 9, max: 7.2, min: 5.3 });
+  doc.font('Helvetica-Bold').fontSize(5.8).text('RACK/SLOT', 165, 142, { width: 34, lineBreak: false });
+  line(doc, 199, 146, right, 146, 0.9);
+
+  drawCode128(doc, labelCode, 55, 150, 118, 12);
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `PO: ${orderCode || '-'}`, left, 163, { width: 52, height: 7, max: 5.5, min: 4.7 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), `SUMP: ${labelCode}`, 63, 163, { width: 100, height: 7, max: 5.8, min: 4.8 });
+  drawSingleLineFit(doc.font('Helvetica-Bold'), companyName, 166, 163, { width: right - 166, height: 7, max: 4.9, min: 4.2 });
+  doc.restore();
+}
+
+function drawPieceLabel(doc, { order, piece, uploadsBase, labelSpec }) {
+  if (labelSpec.layout === 'compact') {
+    drawCompactPieceLabel(doc, { order, piece, uploadsBase, labelSpec });
+    return;
+  }
+  drawLargePieceLabel(doc, { order, piece, uploadsBase, labelSpec });
+}
+
+async function createPieceLabelsPdf({ order, pieces, outputPath, uploadsBase, labelSize }) {
+  const labelSpec = resolveLabelSize(labelSize);
   const preparedPieces = [];
   for (const piece of pieces) {
     preparedPieces.push(await preparePieceLabelData(piece, uploadsBase));
   }
 
-  const doc = new PDFDocument({ size: [288, 432], margin: 0, autoFirstPage: false });
+  const doc = new PDFDocument({ size: [labelSpec.width, labelSpec.height], margin: 0, autoFirstPage: false });
   const stream = fs.createWriteStream(outputPath);
   doc.pipe(stream);
 
   for (const piece of preparedPieces) {
-    doc.addPage({ size: [288, 432], margin: 0 });
-    drawPieceLabel(doc, { order, piece, uploadsBase });
+    doc.addPage({ size: [labelSpec.width, labelSpec.height], margin: 0 });
+    drawPieceLabel(doc, { order, piece, uploadsBase, labelSpec });
   }
 
   doc.end();
@@ -493,6 +722,7 @@ async function createPieceLabelsPdf({ order, pieces, outputPath, uploadsBase }) 
 
 module.exports = {
   createPieceLabelsPdf,
+  normalizeLabelSize,
   metricSize,
   safeBarcodeText,
   workflowCodes,

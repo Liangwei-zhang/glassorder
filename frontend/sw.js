@@ -6,7 +6,7 @@
  * - Uploaded artifacts (/uploads/*): network-only, never cached, because access is role-gated.
  * - API calls (/api/*): network-only, never cached.
  */
-const VERSION = 'v53-2026-06-09-pickup-hold-release';
+const VERSION = 'v54-2026-06-13-parser-cache';
 const STATIC_CACHE = `glassorder-static-${VERSION}`;
 const ASSET_CACHE = `glassorder-assets-${VERSION}`;
 const PRECACHE_HTML = [
@@ -21,6 +21,7 @@ const PRECACHE_HTML = [
   './customers.html',
   './pickup-search.html',
   './pickup-sign.html',
+  './customer-sign.html',
   './pickup-slip.html',
   './pickup-batches.html',
   './pickup-batch-detail.html',
@@ -33,6 +34,8 @@ const PRECACHE_ASSET = [
   './js/i18n.js',
   './manifest.json',
   './icons/loading.gif',
+  './icons/logo.jpg',
+  './icons/favicon-32.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

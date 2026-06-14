@@ -184,27 +184,34 @@ P1="$(json_field '.order.pieces[0].id' < "$tmp/detail.json")"
 P2="$(json_field '.order.pieces[1].id' < "$tmp/detail.json")"
 P3="$(json_field '.order.pieces[2].id' < "$tmp/detail.json")"
 
-# --- P3-T2 process config can skip tempered: cut -> edge -> polish -> finished
+# --- P3-T2 process config can skip tempered: cut -> edge -> finished
 code=$(curl -s -o "$tmp/p3-config.json" -w '%{http_code}' -X PATCH \
   "${AUTH[@]}" -H 'Content-Type: application/json' \
-  -d '{"required_steps":["cut","edge","polish"]}' \
+  -d '{"required_steps":["cut","edge"]}' \
   "$BASE/api/pieces/$P3/process-config")
 status "$code" 200 "piece process config"
-for n in 1 2 3; do
+for n in 1 2; do
   code=$(curl -s -o "$tmp/p3-$n.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P3/advance")
   status "$code" 200 "piece skip-tempered advance $n"
 done
-P3_STAGE="$(json_field '.piece.stage' < "$tmp/p3-3.json")"
+P3_STAGE="$(json_field '.piece.stage' < "$tmp/p3-2.json")"
 [ "$P3_STAGE" = "finished" ] || { echo "FAIL skip-tempered stage: $P3_STAGE" >&2; exit 1; }
 
-for n in 1 2 3 4; do
+for n in 1 2 3; do
   code=$(curl -s -o "$tmp/p1-$n.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P1/advance")
   status "$code" 200 "piece1 advance $n"
 done
-P1_POLISH_STAGE="$(json_field '.piece.stage' < "$tmp/p1-3.json")"
-[ "$P1_POLISH_STAGE" = "polish" ] || { echo "FAIL piece1 should be polish after 3 advances: $P1_POLISH_STAGE" >&2; exit 1; }
-P1_STAGE="$(json_field '.piece.stage' < "$tmp/p1-4.json")"
+P1_STAGE="$(json_field '.piece.stage' < "$tmp/p1-3.json")"
 [ "$P1_STAGE" = "finished" ] || { echo "FAIL piece1 stage: $P1_STAGE" >&2; exit 1; }
+
+code=$(curl -s -o "$tmp/p1-polish.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P1/send-polish")
+status "$code" 200 "piece1 send polish"
+P1_POLISH_STAGE="$(json_field '.piece.stage' < "$tmp/p1-polish.json")"
+[ "$P1_POLISH_STAGE" = "polish" ] || { echo "FAIL piece1 should be polish after send-polish: $P1_POLISH_STAGE" >&2; exit 1; }
+code=$(curl -s -o "$tmp/p1-polished.json" -w '%{http_code}' -X POST "${AUTH[@]}" "$BASE/api/pieces/$P1/advance")
+status "$code" 200 "piece1 polish advance"
+P1_STAGE="$(json_field '.piece.stage' < "$tmp/p1-polished.json")"
+[ "$P1_STAGE" = "finished" ] || { echo "FAIL piece1 after polish stage: $P1_STAGE" >&2; exit 1; }
 
 code=$(curl -s -o "$tmp/p2-broken.json" -w '%{http_code}' -X POST \
   "${AUTH[@]}" -H 'Content-Type: application/json' \

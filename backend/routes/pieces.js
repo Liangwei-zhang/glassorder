@@ -8,7 +8,11 @@ const {
   hydratePieceWorkflow,
   normalizeRequiredSteps,
   processConfigJSON,
+  redoPieceState,
+  returnPreviousPieceState,
+  sendPieceToPolishState,
 } = require('../services/pieceWorkflow');
+const { syncOrderStatusFromPieces } = require('../services/orderStatus');
 
 const router = express.Router();
 const STAGES = DISPLAY_STAGES;
@@ -43,6 +47,12 @@ function getPiece(id) {
 
 function body(req) {
   return req.body || {};
+}
+
+function pieceLockedForCorrection(piece) {
+  if (piece.picked_up_at) return 'Picked up pieces cannot be changed';
+  if (piece.hold) return 'Piece is on hold';
+  return '';
 }
 
 router.get('/', requireRole('boss', 'worker'), (req, res) => {
@@ -112,6 +122,91 @@ router.post('/:id/broken', requireRole('boss', 'worker'), (req, res) => {
     from: piece.stage,
     note: body(req).note || null,
   });
+  syncOrderStatusFromPieces(piece.order_id);
+  res.json({ piece: boolRow(getPiece(piece.id)) });
+});
+
+router.post('/:id/send-polish', requireRole('boss', 'worker'), (req, res) => {
+  const piece = boolRow(getPiece(req.params.id));
+  if (!piece) return res.status(404).json({ error: 'Piece not found' });
+  const locked = pieceLockedForCorrection(piece);
+  if (locked) return res.status(400).json({ error: locked });
+
+  const next = sendPieceToPolishState(piece);
+  if (!next) {
+    return res.status(400).json({ error: 'Piece must complete tempering before polishing' });
+  }
+
+  db.prepare(`
+    UPDATE pieces
+    SET stage = 'polish',
+        process_config = ?,
+        completed_steps = ?,
+        broken = 0
+    WHERE id = ?
+  `).run(
+    processConfigJSON(next.required_steps),
+    completedStepsJSON(next.completed_steps),
+    piece.id,
+  );
+  insertEvent(piece.order_id, piece.id, req.user.id, 'piece_sent_to_polish', {
+    from: piece.stage,
+    to: 'polish',
+    required_steps: next.required_steps,
+    note: body(req).note || null,
+  });
+  syncOrderStatusFromPieces(piece.order_id);
+  res.json({ piece: boolRow(getPiece(piece.id)) });
+});
+
+router.post('/:id/return-previous', requireRole('boss', 'worker'), (req, res) => {
+  const piece = boolRow(getPiece(req.params.id));
+  if (!piece) return res.status(404).json({ error: 'Piece not found' });
+  const locked = pieceLockedForCorrection(piece);
+  if (locked) return res.status(400).json({ error: locked });
+
+  const next = returnPreviousPieceState(piece);
+  if (!next) return res.status(400).json({ error: 'Piece is already at the first step' });
+
+  db.prepare(`
+    UPDATE pieces
+    SET stage = ?,
+        completed_steps = ?,
+        broken = 0
+    WHERE id = ?
+  `).run(next.stage, completedStepsJSON(next.completed_steps), piece.id);
+  insertEvent(piece.order_id, piece.id, req.user.id, 'piece_returned_previous', {
+    from: piece.stage,
+    to: next.stage,
+    completed_steps: next.completed_steps,
+    note: body(req).note || null,
+  });
+  syncOrderStatusFromPieces(piece.order_id);
+  res.json({ piece: boolRow(getPiece(piece.id)) });
+});
+
+router.post('/:id/redo', requireRole('boss', 'worker'), (req, res) => {
+  const piece = boolRow(getPiece(req.params.id));
+  if (!piece) return res.status(404).json({ error: 'Piece not found' });
+  const locked = pieceLockedForCorrection(piece);
+  if (locked) return res.status(400).json({ error: locked });
+
+  const next = redoPieceState(piece);
+  db.prepare(`
+    UPDATE pieces
+    SET stage = 'cut',
+        completed_steps = ?,
+        rework = 1,
+        broken = 0,
+        hold = 0
+    WHERE id = ?
+  `).run(completedStepsJSON(next.completed_steps), piece.id);
+  insertEvent(piece.order_id, piece.id, req.user.id, 'piece_redo', {
+    from: piece.stage,
+    to: 'cut',
+    note: body(req).note || null,
+  });
+  syncOrderStatusFromPieces(piece.order_id);
   res.json({ piece: boolRow(getPiece(piece.id)) });
 });
 
@@ -181,7 +276,7 @@ router.post('/batch', requireRole('boss', 'worker'), (req, res) => {
     const out = [];
     for (const piece of rows) {
       if (action === 'advance' || action === 'complete') {
-        if (piece.hold && action === 'advance') {
+        if (piece.hold) {
           insertEvent(piece.order_id, piece.id, req.user.id, 'piece_batch_skipped', {
             reason: 'hold',
             action,

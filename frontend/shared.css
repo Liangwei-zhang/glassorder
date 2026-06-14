@@ -90,6 +90,12 @@ body {
   touch-action: manipulation;
 }
 body.app-overlay-open { overflow: hidden; }
+body.login-page {
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(17, 24, 39, .98) 0, rgba(24, 24, 27, .95) 55%, rgba(250, 250, 249, 1) 55.1%),
+    var(--bg);
+}
 input, textarea {
   -webkit-user-select: text;
   user-select: text;
@@ -141,6 +147,275 @@ button:focus-visible, a:focus-visible, .btn:focus-visible,
 
 .tap { min-height: 56px; }
 .tap-lg { min-height: 64px; }
+.app-logo {
+  display: inline-block;
+  width: 112px;
+  height: 103px;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.app-logo-login {
+  margin-bottom: 14px;
+}
+.app-logo-index {
+  width: 120px;
+  height: 110px;
+  margin-bottom: 14px;
+}
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(380px, .95fr);
+  align-items: center;
+  gap: clamp(24px, 5vw, 72px);
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: clamp(24px, 5vw, 56px);
+}
+.login-brand-panel {
+  color: var(--text-on-dark);
+  min-width: 0;
+}
+.login-brand-top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.login-brand-top .app-logo {
+  flex: 0 0 auto;
+  width: 138px;
+  height: 126px;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 22px 52px rgba(0,0,0,.28);
+}
+.login-brand-eyebrow {
+  color: rgba(250,250,250,.7);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+.login-brand-title {
+  margin: 6px 0 0;
+  font-size: clamp(34px, 5vw, 56px);
+  line-height: 1.02;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+.login-brand-copy {
+  max-width: 540px;
+  margin: 28px 0 0;
+  color: rgba(250,250,250,.82);
+  font-size: clamp(16px, 2vw, 19px);
+  line-height: 1.7;
+}
+.login-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 520px;
+  margin-top: 30px;
+}
+.login-metric {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: var(--r-md);
+  background: rgba(255,255,255,.08);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+.login-metric span {
+  display: block;
+  color: rgba(250,250,250,.62);
+  font-size: 12px;
+  font-weight: 750;
+}
+.login-metric strong {
+  display: block;
+  margin-top: 5px;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1.15;
+  font-weight: 850;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.login-card-shell {
+  width: 100%;
+  min-width: 0;
+  padding: clamp(20px, 3.5vw, 32px);
+  border: 1px solid rgba(255,255,255,.78);
+  border-radius: 22px;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 28px 80px rgba(15,15,20,.18), 0 1px 2px rgba(15,15,20,.06);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+.login-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.login-card-kicker {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .06em;
+}
+.login-card-title {
+  margin: 5px 0 0;
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+.login-card-sub {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+}
+.login-lang-btn {
+  flex: 0 0 auto;
+  min-width: 54px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+}
+.login-app-line {
+  margin-top: 18px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+.login-install {
+  margin-top: 10px;
+}
+.login-install .btn {
+  width: 100%;
+  min-height: 42px;
+}
+.login-form-card {
+  margin-top: 22px;
+}
+.login-password-label {
+  margin-top: 16px;
+}
+.login-input {
+  min-height: 48px;
+  background: rgba(255,255,255,.96);
+}
+.login-submit {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 20px;
+  font-size: 16px;
+  font-weight: 850;
+}
+.login-footnote {
+  margin-top: 16px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+@media (max-width: 760px) {
+  body.login-page {
+    background: linear-gradient(180deg, #111827 0, #18181b 260px, var(--bg) 260px);
+  }
+  .login-shell {
+    display: block;
+    min-height: 100vh;
+    padding: 28px 20px 36px;
+  }
+  .login-brand-panel {
+    text-align: center;
+  }
+  .login-brand-top {
+    display: block;
+  }
+  .login-brand-top .app-logo {
+    width: 112px;
+    height: 103px;
+  }
+  .login-brand-eyebrow {
+    margin-top: 10px;
+    font-size: 11px;
+  }
+  .login-brand-title {
+    margin-top: 4px;
+    font-size: 30px;
+  }
+  .login-brand-copy {
+    display: none;
+  }
+  .login-metrics {
+    display: none;
+  }
+  .login-card-shell {
+    margin-top: 30px;
+    padding: 20px;
+    border-radius: var(--r-lg);
+  }
+  .login-card-title {
+    font-size: 24px;
+  }
+}
+.piece-action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.piece-action-section {
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 10px;
+}
+.piece-action-section-success {
+  background: var(--success-soft);
+  color: var(--success-text);
+  text-align: center;
+}
+.piece-action-section-danger {
+  background: var(--danger-soft);
+  border-color: rgba(220, 38, 38, .2);
+}
+.piece-action-title {
+  font-size: 14px;
+  font-weight: 800;
+}
+.piece-action-label {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.piece-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.piece-action-buttons .btn {
+  flex: 1 1 150px;
+}
+.piece-action-help {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 8px;
+}
 
 /* Subtle page transitions and content entrance */
 .center-col { max-width: 520px; margin: 0 auto; }
@@ -766,6 +1041,7 @@ body.motion-premium .btn-warn::before {
   box-shadow: 0 -0.5px 0 rgba(15,15,20,.08);
 }
 .action-bar .btn { flex: 1; min-height: 52px; border-radius: var(--r-md); }
+.action-bar .btn::before { display: none; }
 .action-bar .btn-ghost.back { flex: 1; }
 .action-bar .btn-primary,
 .action-bar .btn-success,
@@ -1300,6 +1576,145 @@ body.motion-premium .skel {
 }
 
 /* ============================================================
+   Public customer signing
+   ============================================================ */
+.customer-sign-body {
+  min-height: 100vh;
+  background: var(--bg);
+}
+.customer-sign-shell {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 18px 14px calc(28px + env(safe-area-inset-bottom, 0px));
+}
+.customer-sign-brand {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 2px 16px;
+}
+.customer-sign-logo {
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: var(--surface);
+  border: 1px solid var(--border-1);
+}
+.customer-sign-kicker {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+.customer-sign-brand h1 {
+  margin: 2px 0 0;
+  font-size: 24px;
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+.customer-sign-lang {
+  position: static;
+  min-width: 44px;
+}
+.customer-sign-card {
+  padding: 16px;
+}
+.customer-sign-copy {
+  margin-bottom: 12px;
+}
+.customer-sign-privacy {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  background: var(--info-soft);
+  color: var(--info-text);
+  font-size: 12px;
+  font-weight: 750;
+}
+.customer-sign-metrics {
+  margin: 10px 0 12px;
+}
+.customer-sign-orders {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+.customer-sign-order {
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+  padding: 12px;
+  background: var(--surface-2);
+}
+.customer-sign-piece {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-2);
+  font-size: 13px;
+}
+.customer-sign-piece:first-of-type {
+  margin-top: 8px;
+}
+.customer-sign-piece span {
+  font-weight: 850;
+  color: var(--text-1);
+}
+.customer-sign-piece em {
+  color: var(--text-2);
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+.customer-sign-field-gap {
+  margin-top: 12px;
+}
+.customer-sign-pad {
+  margin-top: 8px;
+  height: 220px;
+}
+.customer-sign-actions {
+  display: grid;
+  grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.customer-sign-terminal {
+  display: grid;
+  gap: 8px;
+  min-height: 220px;
+  align-content: center;
+}
+.customer-sign-terminal strong {
+  display: block;
+  color: var(--text-1);
+  font-size: 20px;
+}
+.customer-sign-terminal span {
+  display: block;
+}
+.customer-sign-terminal.success {
+  border: 1px solid var(--success-soft);
+  color: var(--success-text);
+}
+
+@media (max-width: 420px) {
+  .customer-sign-shell {
+    padding-inline: 10px;
+  }
+  .customer-sign-brand h1 {
+    font-size: 22px;
+  }
+  .customer-sign-card {
+    padding: 12px;
+  }
+  .customer-sign-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================
    Pop-up menu (kebab ⋯)
    ============================================================ */
 .menu-pop {
@@ -1719,6 +2134,52 @@ body.motion-premium .skel {
 .checkbox-row input[type="checkbox"] { accent-color: var(--accent); }
 
 /* ============================================================
+   Label print controls
+   ============================================================ */
+.label-size-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(78px, auto));
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.label-size-control span {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.label-size-option {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.label-size-option.active {
+  background: var(--brand);
+  color: var(--text-on-dark);
+  border-color: var(--brand);
+}
+@media (max-width: 380px) {
+  .label-size-control { grid-template-columns: 1fr 1fr; }
+  .label-size-control span { grid-column: 1 / -1; }
+}
+
+/* ============================================================
    Visual ornament
    ============================================================ */
 .rush-ring { box-shadow: 0 0 0 2px #fecaca; }
@@ -2023,11 +2484,37 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
 }
 .pickup-bulk-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
 }
 .pickup-bulk-actions .btn {
+  flex: 1 1 136px;
+}
+.pickup-customer-hold-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.pickup-customer-hold-copy {
+  min-width: 0;
   flex: 1;
+}
+.pickup-customer-hold-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.pickup-hold-badge {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 .pickup-order-actions {
   display: flex;
@@ -2039,6 +2526,88 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   min-height: 34px;
   padding: 6px 10px;
   font-size: 12px;
+}
+.pickup-qr-card {
+  margin-top: 12px;
+  overflow: hidden;
+}
+.pickup-qr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pickup-qr-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.pickup-qr-box {
+  width: 224px;
+  min-height: 224px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+  background: #fff;
+  padding: 10px;
+}
+.pickup-qr-box svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pickup-qr-copy {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.pickup-qr-link {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border: 1px dashed var(--border-1);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.pickup-qr-countdown {
+  color: var(--accent-strong);
+  font-weight: 850;
+  font-size: 13px;
+}
+.pickup-qr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  .pickup-customer-hold-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pickup-customer-hold-actions .btn {
+    flex: 1 1 128px;
+  }
+  .pickup-qr-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pickup-qr-body {
+    grid-template-columns: 1fr;
+  }
+  .pickup-qr-box {
+    width: min(100%, 260px);
+    min-height: 0;
+    margin: 0 auto;
+  }
+  .pickup-qr-actions .btn {
+    flex: 1 1 128px;
+  }
 }
 .pickup-step {
   min-width: 0;

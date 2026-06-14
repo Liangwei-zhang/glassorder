@@ -6,9 +6,9 @@ const multer = require('multer');
 const { randomUUID } = require('crypto');
 const db = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
-const { parsePdf } = require('../services/pdfParser');
+const { parsePdf, extractPieceTagsFromPdf } = require('../services/pdfParser');
 const { createPickupSlip } = require('../services/slipPdf');
-const { createPieceLabelsPdf } = require('../services/pieceLabels');
+const { createPieceLabelsPdf, normalizeLabelSize } = require('../services/pieceLabels');
 const { sendPickupEmail } = require('../services/mailer');
 const { decodeOptionalPngSignature } = require('../services/signature');
 const { extractPoCodeFromFilename, poCodeKey, poLookupKeys } = require('../services/poCode');
@@ -94,6 +94,33 @@ function fileHash(filePath) {
   const hash = crypto.createHash('sha256');
   hash.update(fs.readFileSync(filePath));
   return hash.digest('hex');
+}
+
+function uploadFilePath(publicPath) {
+  const text = String(publicPath || '');
+  if (!text.startsWith('/uploads/')) return '';
+  const rel = text.replace(/^\/uploads\//, '').replace(/\\/g, '/');
+  const target = path.resolve(uploadsBase, rel);
+  const root = path.resolve(uploadsBase);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) return '';
+  return target;
+}
+
+function hydrateMissingPieceTags(order, pieces) {
+  if (!pieces.some((piece) => !piece.tag) || !order.pdf_path) return pieces;
+  const pdfPath = uploadFilePath(order.pdf_path);
+  if (!pdfPath || !fs.existsSync(pdfPath)) return pieces;
+  let parsedTags = [];
+  try {
+    parsedTags = extractPieceTagsFromPdf(pdfPath);
+  } catch (err) {
+    parsedTags = [];
+  }
+  if (!parsedTags.length) return pieces;
+  return pieces.map((piece) => ({
+    ...piece,
+    tag: piece.tag || parsedTags[Number(piece.piece_no) - 1] || '',
+  }));
 }
 
 function orderSelect() {
@@ -391,21 +418,27 @@ router.post('/:id/labels', requireRole('boss'), async (req, res, next) => {
       }
     }
     if (!pieces.length) return res.status(400).json({ error: 'No pieces selected for labels' });
+    pieces = hydrateMissingPieceTags(order, pieces);
+
+    const labelSize = normalizeLabelSize(req.body && req.body.label_size);
+    if (!labelSize) return res.status(400).json({ error: 'label_size must be 100x150 or 80x60' });
 
     const fileOrderCode = safeSegment(order.order_number);
-    const labelFile = `labels-${fileOrderCode}-${Date.now()}.pdf`;
+    const labelFile = `labels-${fileOrderCode}-${labelSize}-${Date.now()}.pdf`;
     const outputPath = path.join(labelDir, labelFile);
     await createPieceLabelsPdf({
       order,
       pieces,
       outputPath,
       uploadsBase,
+      labelSize,
     });
     const labelPdfPath = `/uploads/labels/${labelFile}`;
     insertEvent(order.id, null, req.user.id, 'piece_labels_generated', {
       label_pdf_path: labelPdfPath,
       count: pieces.length,
       piece_ids: pieces.map((piece) => piece.id),
+      label_size: labelSize,
     });
 
     res.json({
@@ -413,6 +446,7 @@ router.post('/:id/labels', requireRole('boss'), async (req, res, next) => {
       label_pdf_path: labelPdfPath,
       count: pieces.length,
       piece_ids: pieces.map((piece) => piece.id),
+      label_size: labelSize,
     });
   } catch (err) {
     next(err);
@@ -473,6 +507,7 @@ router.patch('/:id', requireRole('boss'), (req, res) => {
               thickness = @thickness,
               weight = @weight,
               piece_note = @piece_note,
+              tag = @tag,
               process_config = @process_config,
               completed_steps = @completed_steps,
               stage = @stage
@@ -485,6 +520,7 @@ router.patch('/:id', requireRole('boss'), (req, res) => {
           thickness: piecePatch.thickness !== undefined ? String(piecePatch.thickness || '').trim() || null : piece.thickness,
           weight: piecePatch.weight !== undefined ? String(piecePatch.weight || '').trim() || null : piece.weight,
           piece_note: piecePatch.piece_note !== undefined ? String(piecePatch.piece_note || '').trim() || null : piece.piece_note,
+          tag: piecePatch.tag !== undefined ? String(piecePatch.tag || '').trim() || null : piece.tag,
           process_config: processConfigJSON(requiredSteps),
           completed_steps: completedStepsJSON(completedSteps),
           stage,
@@ -496,6 +532,7 @@ router.patch('/:id', requireRole('boss'), (req, res) => {
       }
     }
   })();
+  syncOrderStatusFromPieces(order.id);
 
   res.json({ order: getOrderWithPieces(order.id) });
 });
@@ -821,12 +858,12 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
       const insertPiece = db.prepare(`
         INSERT INTO pieces (
           order_id, piece_no, stage, hold, rework, broken,
-          size, type, thickness, weight, piece_note, drawing_path,
+          size, type, thickness, weight, piece_note, tag, drawing_path,
           process_config, completed_steps
         )
         VALUES (
           @order_id, @piece_no, 'cut', 0, 0, 0,
-          @size, @type, @thickness, @weight, @piece_note, @drawing_path,
+          @size, @type, @thickness, @weight, @piece_note, @tag, @drawing_path,
           @process_config, @completed_steps
         )
       `);
@@ -842,6 +879,7 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
           thickness: piece.thickness,
           weight: piece.weight,
           piece_note: piece.piece_note,
+          tag: piece.tag || null,
           drawing_path: piece.drawing_path,
           process_config: processConfigJSON(requiredSteps),
           completed_steps: '[]',

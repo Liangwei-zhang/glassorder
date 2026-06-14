@@ -4,43 +4,69 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Glass Factory Orders</title>
-<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
+<link rel="stylesheet" href="shared.css?v=20260608-login-ui">
 </head>
-<body>
-<div class="center-col" style="padding: 48px 20px;">
-  <div style="text-align:center; margin-bottom: 32px;">
-    <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; background:var(--surface); border-radius:16px; box-shadow:var(--shadow-md); margin-bottom:14px;">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="color:var(--brand);" aria-hidden="true">
-        <path d="M2 20V8l6 4V8l6 4V8l6 4v8z"></path>
-        <path d="M2 20h20"></path>
-      </svg>
+<body class="login-page">
+<main class="login-shell">
+  <section class="login-brand-panel" aria-label="brand">
+    <div class="login-brand-top">
+      <img class="app-logo app-logo-login" src="icons/logo.jpg" alt="Sunshine Tempered Glass">
+      <div>
+        <div class="login-brand-eyebrow" data-i18n="loginEyebrow">SUNSHINE TEMPERED GLASS</div>
+        <h1 class="login-brand-title" data-i18n="appTitle">玻璃厂订单</h1>
+      </div>
     </div>
-    <div class="title-tight" style="font-size: 24px; font-weight: 700;" data-i18n="appTitle">玻璃厂订单</div>
-    <div style="color:var(--text-2); margin-top: 6px; font-size: 14px;" data-i18n="loginSubtitle">登录后进入工作台</div>
-    <div style="color:var(--text-2); margin-top: 6px; font-size: 13px;" data-app-line-browser="appBrowserLine" data-app-line-installed="appInstalledLine">建议安装到主屏幕，获得更接近原生应用的体验</div>
-    <div style="margin-top: 12px;" data-install-only-browser>
+    <p class="login-brand-copy" data-i18n="loginHeroCopy">从订单上传、车间生产到客户取货，一套系统掌握每一片玻璃。</p>
+    <div class="login-metrics" aria-label="workflow">
+      <div class="login-metric">
+        <span data-i18n="loginMetricOrders">订单</span>
+        <strong>PO</strong>
+      </div>
+      <div class="login-metric">
+        <span data-i18n="loginMetricShop">车间</span>
+        <strong data-i18n="stageTempered">钢化</strong>
+      </div>
+      <div class="login-metric">
+        <span data-i18n="loginMetricPickup">取货</span>
+        <strong data-i18n="statusReadyPickup">可取货</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="login-card-shell">
+    <div class="login-card-head">
+      <div>
+        <div class="login-card-kicker" data-i18n="loginSecureKicker">安全工作台</div>
+        <h2 class="login-card-title" data-i18n="loginWelcomeTitle">登录系统</h2>
+        <p class="login-card-sub" data-i18n="loginSubtitle">登录后进入工作台</p>
+      </div>
+      <button class="lang-btn login-lang-btn" type="button" onclick="toggleLang()" data-i18n="language">EN</button>
+    </div>
+
+    <div class="login-app-line" data-app-line-browser="appBrowserLine" data-app-line-installed="appInstalledLine">建议安装到主屏幕，获得更接近原生应用的体验</div>
+    <div class="login-install" data-install-only-browser>
       <button class="btn btn-ghost" type="button" onclick="launchInstallPrompt()" data-i18n="installApp">安装应用</button>
     </div>
-    <div style="margin-top: 14px;"><button class="lang-btn" type="button" onclick="toggleLang()" style="background:var(--surface-2); color:var(--text-1); padding:7px 14px; border-radius:var(--r-sm); border:none; font-weight:600; font-size:13px; cursor:pointer;">EN</button></div>
-  </div>
 
-  <form class="card" id="form">
-    <label class="form-label" data-i18n="loginLabel">手机号 / 邮箱</label>
-    <input class="form-input" id="login" data-i18n-placeholder="loginPlaceholder" placeholder="如: admin 或 13800000000" autocomplete="username" required>
+    <form class="login-form-card" id="form">
+      <label class="form-label" data-i18n="loginLabel">手机号 / 邮箱</label>
+      <input class="form-input login-input" id="login" data-i18n-placeholder="loginPlaceholder" placeholder="如: admin 或 13800000000" autocomplete="username" required>
 
-    <label class="form-label" style="margin-top: 14px;" data-i18n="password">密码</label>
-    <input class="form-input" id="password" type="password" data-i18n-placeholder="passwordPlaceholder" placeholder="请输入密码" autocomplete="current-password" required>
+      <label class="form-label login-password-label" data-i18n="password">密码</label>
+      <input class="form-input login-input" id="password" type="password" data-i18n-placeholder="passwordPlaceholder" placeholder="请输入密码" autocomplete="current-password" required>
 
-    <button class="btn btn-primary" id="submitBtn" style="width:100%; margin-top: 18px;" type="submit" data-i18n="loginBtn">登录</button>
-    <div id="error" class="login-error" role="alert" aria-live="polite">
-      <strong data-i18n="loginFailed">登录失败</strong>
-      <span id="errorText"></span>
-    </div>
-  </form>
-</div>
+      <button class="btn btn-primary login-submit" id="submitBtn" type="submit" data-i18n="loginBtn">登录</button>
+      <div id="error" class="login-error" role="alert" aria-live="polite">
+        <strong data-i18n="loginFailed">登录失败</strong>
+        <span id="errorText"></span>
+      </div>
+    </form>
+    <div class="login-footnote" data-i18n="loginFootnote">仅限授权员工访问，操作记录会写入审计日志。</div>
+  </section>
+</main>
 
-<script src="js/api.js?v=20260608-po-order-number"></script>
-<script src="js/i18n.js?v=20260608-po-order-number"></script>
+<script src="js/api.js?v=20260608-login-ui"></script>
+<script src="js/i18n.js?v=20260608-login-ui"></script>
 <script>
 document.getElementById('form').addEventListener('submit', async (e) => {
   e.preventDefault();

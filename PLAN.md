@@ -215,27 +215,11 @@ cd backend && npm install && npm start
   - boss order detail inline script check
   - `BASE=http://localhost:8783 node scripts/piece-label-qa.js`
   - `BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `BASE=http://localhost:8783 node scripts/pickup-hold-qa.js`
   - `npm ls --prefix backend sharp --depth=0`
   - `pdftoppm -png -f 1 -l 1 -singlefile -r 160 <latest-label.pdf> /tmp/glassorder-label-qa-latest` 后人工对照样片确认版面无重叠
   - `git diff --check`
 - Default service `:8781` restarted to load the new backend route; read-only checks confirmed health, `boss-order-detail.html` serves the new asset query, `sw.js` serves `v52-2026-06-09-piece-labels`, and `/api/orders/999999999/labels` returns JSON `Order not found` without writing default business data.
-
-
-## Phase 46：取片 HOLD 解除修复（2026-06-09）
-
-### 目标
-修复客户取单界面整单 HOLD 后无法解除的问题。
-
-### 实施
-- 取片可用列表支持 `include_hold=1`，让已 HOLD 的已完成未取片仍能显示在老板取片页中。
-- 新增整单 HOLD/解除、客户全部 HOLD/解除接口，只作用于 `stage='finished'` 且未取走的片。
-- 取片页显示 HOLD 片但禁用选择，同时保留解除按钮；全选和按单全选忽略 HOLD 片。
-- 新增 `scripts/pickup-hold-qa.js` 覆盖整单/客户 HOLD 与解除流程。
-
-### 验证
-- `BASE=http://localhost:8783 node scripts/pickup-hold-qa.js`
-- `BASE=http://localhost:8783 node scripts/select-all-qa.js`
-- `git diff --check`
 
 ## Phase 14：车间流程与交付功能更新（2026-06-07）
 
@@ -3018,3 +3002,548 @@ git diff --check -- glassorder
 
 ### 风险与结论
 这是可改的。由于客户已确认可以清空业务数据并重新上传，风险比历史迁移方案低：不需要把旧 `number_order` 映射成 PO，也不需要保留两套编号。主要风险集中在文件名识别和重复 PO 拦截，必须通过样例解析、上传重复、老板搜索、工人显示和取货显示这些 QA 后再清正式库。
+
+## Phase 40：车间流程修正、完成片返工与取片 HOLD
+
+### 需求澄清
+- 默认玻璃流程应为 `切玻璃 -> 开切口 -> 钢化 -> 完成`。
+- `打磨` 不是默认必经工序；钢化完成后检查发现有问题或需要额外处理时，手动把该片转到 `打磨`。
+- 车间页“全选 + 批量完成”应只完成当前工位的一步，切玻璃后进入开切口，不能直接跳到完成。
+- 已完成的片需要可纠正：送去打磨、退回上一级、或重做回切玻璃。
+- 取片页需要能把整单 on hold，或把某个客户当前所有可取片 on hold；同时必须能解除 hold。
+
+### 后端任务
+- 修改 `backend/services/pieceWorkflow.js`：
+  - 新订单默认 `required_steps` 改为 `cut/edge/tempered`。
+  - 保留 `polish` 为合法可选工序。
+  - 新增状态辅助：送打磨、退回上一级、重做。
+- 修改 `backend/routes/pieces.js`：
+  - 新增完成片操作接口：`send-polish`、`return-previous`、`redo`。
+  - 操作后写入事件，并在必要时同步订单状态，避免 ready 订单被返工后仍显示可取货。
+- 修改 `backend/routes/pickups.js`：
+  - `available` 支持 `include_hold=1`，取片页能看到被 hold 的可取片以便解除。
+  - 新增整单 hold/unhold 和客户 hold/unhold，只作用于 `stage='finished'` 且未取走的片，避免锁住生产中的玻璃。
+  - 保持取货提交接口拒绝 hold 片。
+
+### 前端任务
+- 修改 `frontend/worker-pieces.html`：
+  - 批量主按钮从一次性 `complete` 改为一步 `advance`。
+  - 完成片弹窗增加“送去打磨”“退回上一级”“重做”。
+  - 高级工序配置默认恢复为 `cut/edge/tempered`，跳过钢化/开口不再自动包含打磨。
+- 修改老板订单编辑相关页面：
+  - 默认工序显示与新默认流程一致，打磨只在勾选时进入流程。
+- 修改 `frontend/pickup-search.html`：
+  - 显示 hold 片但禁用选择。
+  - 增加整单 hold/unhold、客户可取片 hold/unhold。
+  - 全选、按单全选、确认取货都忽略 hold 片。
+- 修改 `frontend/js/i18n.js`：
+  - 增加返工、送打磨、取片 hold 文案。
+
+### 测试任务
+- 更新 `scripts/piece-workflow-qa.js`：
+  - 验证默认流程不包含打磨。
+  - 验证钢化后完成，再手动送打磨，打磨后完成。
+  - 验证完成片退回上一级、重做回切玻璃。
+- 更新 `scripts/select-all-qa.js`：
+  - 浏览器验证切玻璃页全选后批量完成只进入开切口。
+  - 继续验证取片全选和按单全选。
+- 新增 `scripts/pickup-hold-qa.js`：
+  - 验证整单 hold 后默认取片列表隐藏，`include_hold=1` 可见且不可取。
+  - 验证整单 unhold 恢复可取。
+  - 验证客户 hold/unhold 作用于该客户所有已完成未取片。
+- 更新 `backend/scripts/smoke.sh`：
+  - 默认流程期望改为第三次推进即完成。
+  - 增加可选打磨路径的 smoke。
+
+### 验收标准
+- 新上传订单的普通玻璃默认只需切、开口、钢化，完成后不会自动进入打磨队列。
+- 从完成片手动送打磨后，该片出现在打磨队列；打磨完成后回到完成。
+- 工人切玻璃页全选后点击批量完成，片子进入开切口，不会直接完成。
+- 完成片可退回上一级；完成片可重做并回到切玻璃，订单状态不再误保持可取。
+- 取片页整单 on hold 后该订单片不可被选中取货；解除后恢复。
+- 取片页客户 on hold 后该客户所有已完成未取片不可被选中取货；解除后恢复。
+- 所有验证只跑 `ENV_FILE=backend/.env.codex-qa` / `BASE=http://localhost:8783`，默认正式库不被写入测试数据。
+
+### 验证命令
+```bash
+bash -n scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/clear-test-data.sh backend/scripts/smoke.sh
+node --check backend/services/pieceWorkflow.js backend/routes/pieces.js backend/routes/pickups.js
+node --check scripts/piece-workflow-qa.js scripts/select-all-qa.js scripts/pickup-hold-qa.js
+ENV_FILE=backend/.env.codex-qa ./scripts/status.sh
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-hold-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js
+git diff --check -- PLAN.md backend frontend scripts
+```
+
+### 执行状态
+- [x] 后端工序默认值与完成片返工接口
+- [x] 取片 hold/unhold 后端接口
+- [x] 工人页、老板页、取片页 UI
+- [x] QA 脚本与 smoke 更新
+- [x] codex QA 环境完整验证
+
+### 实施结果
+- `pieceWorkflow` 默认工序已改为 `cut -> edge -> tempered -> finished`；`polish` 仍是合法可选工序，但不会默认进入新订单流程。
+- `POST /api/pieces/:id/send-polish` 可把已完成钢化的片送入打磨；打磨完成后回到 finished。
+- `POST /api/pieces/:id/return-previous` 可把完成片退回上一级；`POST /api/pieces/:id/redo` 可回到切玻璃并标记 rework。
+- 返工、重做、老板修改工序后会同步订单状态，避免订单仍误显示为可取。
+- 车间页批量主按钮已从后端 `complete` 改为 `advance`，全选切玻璃后只推进到开切口。
+- 后端批量 `advance/complete` 均会跳过 HOLD 片，避免绕过 HOLD。
+- 取片页新增整单 HOLD/解除、客户全部 HOLD/解除；HOLD 只作用于已完成且未取走的片。
+- 取片页通过 `include_hold=1` 显示 HOLD 片，但禁用选择；全选、按单全选和确认取货均忽略 HOLD 片。
+- 工人页、老板订单详情、老板 dashboard 的默认工序显示已统一为切/开口/钢化，打磨只在勾选或送打磨后出现。
+- 空工序网格会清理旧 DOM，避免隐藏的旧片子影响浏览器测试和辅助状态。
+
+### 验证结果（codex QA 隔离环境）
+- `node --check backend/services/pieceWorkflow.js backend/routes/pieces.js backend/routes/pickups.js backend/routes/orders.js scripts/browser-qa.js scripts/select-all-qa.js scripts/piece-workflow-qa.js scripts/pickup-hold-qa.js scripts/perf-check-worker.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js` ✅
+- `bash -n backend/scripts/smoke.sh backend/scripts/zip-upload-smoke.sh scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/clear-test-data.sh` ✅
+- `git diff --check -- PLAN.md backend frontend scripts` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js` ✅，验证默认不含打磨、手动送打磨、退回上一级、重做和订单状态同步。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-hold-qa.js` ✅，验证整单/客户 HOLD、`include_hold=1` 可见、HOLD 片不可取。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js` ✅，验证车间全选批量推进只到下一步，并验证取片 HOLD UI 禁选/解除。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh` ✅，验证默认三步完成、可选打磨、PO、取货、回退、归档主链路。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/security-regression.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/perf-check-worker.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/navigation-browser-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-cc-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/summary-smoke.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa node scripts/po-code-parse-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/po-code-upload-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/motion-browser-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 bash backend/scripts/zip-upload-smoke.sh` ✅。
+- 服务状态：QA `http://localhost:8783/api/health` 正常；默认 `http://localhost:8781/api/health` 正常。
+- 数据隔离：本轮测试命令全部使用 `ENV_FILE=backend/.env.codex-qa` / `BASE=http://localhost:8783`。最终计数显示 QA 库有测试数据；默认库也有业务数据但本轮没有向默认端口执行写入型测试命令。
+
+## Phase 41：全面 QA、前端体验打磨与 BUG 修复
+
+### 目标
+- 在 Phase 40 的基础上再做一轮全面 QA，覆盖上传、PO、车间工序、图纸、取片、HOLD、客户、汇总、PWA、安全和页面矩阵。
+- 重点检查最近改动的前端：车间完成片弹窗、批量选择栏、取片页整单/客户 HOLD 控制、移动端按钮布局、空状态和文案。
+- 发现 BUG 必须修复并重跑相关最小验证；不能只记录不处理。
+- 所有测试继续只使用 `ENV_FILE=backend/.env.codex-qa` / `BASE=http://localhost:8783`。
+
+### QA 任务
+- 静态检查：
+  - `node --check` 覆盖后端路由、workflow helper、QA 脚本、i18n。
+  - `bash -n` 覆盖 shell 脚本。
+  - `git diff --check -- PLAN.md backend frontend scripts`。
+- API/业务验证：
+  - `smoke`
+  - `piece-workflow-qa`
+  - `pickup-hold-qa`
+  - `pickup-batch-smoke`
+  - `po-code-parse-qa`
+  - `po-code-upload-qa`
+  - `customer-cc-qa`
+  - `summary-smoke`
+  - `security-regression`
+- 浏览器验证：
+  - `select-all-qa`
+  - `browser-qa`
+  - `page-matrix-qa`
+  - `pickup-batch-browser-qa`
+  - `worker-drawing-qa`
+  - `ui-regression-qa`
+  - `navigation-browser-qa`
+  - `motion-browser-qa`
+  - `perf-check-worker`
+  - `pwa-install-qa`
+- 手动视觉检查：
+  - 使用 Playwright 在移动端/桌面查看 `worker-pieces.html` 和 `pickup-search.html`。
+  - 检查按钮是否拥挤、文本是否溢出、HOLD 状态是否清晰、完成片操作是否容易误触。
+
+### UI 打磨候选
+- 车间完成片弹窗：把“送打磨 / 退回上一级 / 重做”改成更清晰的分组和危险操作提示，降低误触风险。
+- 取片页 HOLD 控制：减少顶部按钮拥挤，改为更易扫读的客户级控制区；订单级 HOLD 按钮保持紧凑但不挤压 PO 信息。
+- HOLD 片展示：增加视觉标记，让取片员能立即看出“这片不能选是因为 HOLD”。
+- 空状态/提示：避免用户在筛选后看不到片子时误以为系统出错。
+
+### 验收标准
+- 关键页面无 console error、无明显横向溢出、移动端按钮不重叠。
+- 车间完成片操作易辨识，危险动作有确认。
+- 取片页客户级和订单级 HOLD / 解除清晰可用，HOLD 片不能被选中。
+- 全量 QA 命令通过；如有失败，已修复并重跑相关测试。
+- QA 只污染 codex QA 数据库，不对默认库执行写入型测试。
+
+### 执行状态
+- [x] 第一轮全面 QA
+- [x] Playwright 视觉检查
+- [x] UI/BUG 修复
+- [x] 针对性验证
+- [x] 全量回归与结果记录
+
+### 实施结果
+- 修复取片页客户切换时的陈旧列表问题：`loadAvailable()` 现在会先清空旧 `grouped`、显示 loading，并用请求序号和当前客户 ID 防止旧响应覆盖新客户页面。
+- 取片页客户级 HOLD 控制从普通批量按钮区移到独立的 `客户取片 HOLD` 控制条，增加可取/HOLD 数量摘要；HOLD 片增加醒目的 `取片 HOLD` badge，仍保持禁选。
+- 取片页全选 QA 改为等待本轮目标 piece id 全部出现，避免旧客户 DOM 或异步加载造成误判。
+- 车间完成片弹窗重新分组：完成状态、后续处理（送打磨/退回上一级）和返工操作（重做）分区展示；重做继续保留确认弹窗，降低误触。
+- 新增 `.piece-action-*`、`.pickup-customer-hold-*` 等样式，移动端按钮支持换行和自适应宽度。
+- 补充中英文 i18n 文案，并重新生成 `frontend/js/i18n.js`。
+
+### 验证结果（codex QA 隔离环境）
+- `node --check backend/services/pieceWorkflow.js backend/routes/pieces.js backend/routes/pickups.js backend/routes/orders.js scripts/browser-qa.js scripts/select-all-qa.js scripts/piece-workflow-qa.js scripts/pickup-hold-qa.js scripts/perf-check-worker.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js` ✅
+- `bash -n backend/scripts/smoke.sh backend/scripts/zip-upload-smoke.sh scripts/_common.sh scripts/start.sh scripts/stop.sh scripts/status.sh scripts/clear-test-data.sh scripts/backup-runtime.sh` ✅
+- HTML inline script syntax check：`frontend/worker-pieces.html` 3 个 inline script、`frontend/pickup-search.html` 3 个 inline script 均通过 ✅
+- `git diff --check -- PLAN.md backend frontend scripts` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js` ✅，最新输出 `PIECE WORKFLOW QA PASS order=119 piece=902 polish_piece=903 redo_piece=904`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-hold-qa.js` ✅，最新输出 `PICKUP HOLD QA PASS customer=316 orders=120,121`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js` ✅，最新输出 `SELECT ALL QA PASS worker_order=122 customer=317`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅，最新输出 `UI REGRESSION QA PASS checks=18 customer=318 worker_order=123 pickup_order=124`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/worker-drawing-qa.js` ✅，最新输出 `WORKER DRAWING QA PASS order=126 title=第 2 片 · 10mm Clear Tempered`
+- 临时 Playwright 视觉 QA ✅：390px 移动端和 1280px 桌面端检查 `pickup-search.html` 与 `worker-pieces.html`，确认无横向溢出、按钮无裁切、HOLD badge/禁选状态清晰、完成片弹窗分区完整。截图：`/tmp/glassorder-phase41-pickup-mobile.png`、`/tmp/glassorder-phase41-worker-finished-mobile.png`、`/tmp/glassorder-phase41-pickup-desktop.png`、`/tmp/glassorder-phase41-worker-finished-desktop.png`。
+- 移动端取片第二单视口复查 ✅：`/tmp/glassorder-phase41-pickup-second-order-mobile.png`，确认第二单片子真实视口正常显示；此前 full-page 长截图中的大块空白为固定底栏截图拼接伪影。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js` ✅，最新输出覆盖登录、dashboard 搜索/菜单、ready 确认、工人网格、取片确认、时间线、partial pickup、归档菜单。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-smoke.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/security-regression.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-cc-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa node scripts/po-code-parse-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/po-code-upload-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/summary-smoke.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/navigation-browser-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/motion-browser-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/customer-search-qa.js` ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/perf-check-worker.js` ✅，最新输出 `WORKER PERF PASS order=143 piece=1094 actionElapsed=1096.6ms apiCalls=POST /api/pieces/1094/advance`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh` ✅，主链路 `SMOKE PASS`
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 bash backend/scripts/zip-upload-smoke.sh` ✅，`ZIP SMOKE PASS ok=0 duplicate_or_existing=11 total=11`
+- 服务状态：QA `http://localhost:8783/api/health` 正常；默认 `http://localhost:8781/api/health` 正常。
+- 数据隔离：本轮写入型验证全部使用 `ENV_FILE=backend/.env.codex-qa` / `BASE=http://localhost:8783`；默认服务只做健康检查，没有执行写入型测试。
+
+## Phase 42：统一正式公司 logo
+
+### 目标
+- 使用客户提供的正式图片 `/home/nico/.openclaw/workspace-enya/wetempglass/img/logo.jpg` 作为应用统一图标。
+- 替换 PWA manifest 图标、Apple touch icon、登录页和入口页的可见品牌 logo。
+- 保留现有业务功能和导航结构，不做无关 UI 重构。
+
+### 任务
+- 将正式 `logo.jpg` 复制到 `frontend/icons/logo.jpg`。
+- 修改 `scripts/generate-icons.js`，从 `frontend/icons/logo.jpg` 生成：
+  - `frontend/icons/icon-192.png`
+  - `frontend/icons/icon-512.png`
+  - `frontend/icons/icon-maskable-512.png`
+  - `frontend/icons/apple-touch-icon.png`
+- 检查并更新 `frontend/manifest.json`、`frontend/sw.js` 预缓存，确保新 logo 和 PWA 图标会被缓存刷新。
+- 将 `frontend/login.html` 和 `frontend/index.html` 顶部内联 SVG 标志替换为正式 logo 图片。
+
+### 验收标准
+- 项目内不再使用旧的内联“工厂/GO”logo 作为应用品牌图标。
+- PWA icon、Apple touch icon、manifest 图标、登录页、入口页均来自同一正式 logo。
+- 图片尺寸和格式正确：192/512/maskable/180 均可被浏览器加载。
+- 无横向溢出、无 console error，PWA 安装验证通过。
+
+### 验证命令
+```bash
+node --check scripts/generate-icons.js
+node scripts/generate-icons.js
+file frontend/icons/logo.jpg frontend/icons/icon-192.png frontend/icons/icon-512.png frontend/icons/icon-maskable-512.png frontend/icons/apple-touch-icon.png
+node --check scripts/pwa-install-qa.js scripts/page-matrix-qa.js frontend/js/i18n.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js
+git diff --check -- PLAN.md frontend scripts
+```
+
+### 执行状态
+- [x] logo 源文件复制
+- [x] 图标生成脚本更新并生成资产
+- [x] 页面 logo 替换
+- [x] PWA/页面验证
+
+### 实施结果
+- 已将正式 logo 复制到 `frontend/icons/logo.jpg`。
+- `scripts/generate-icons.js` 已改为从正式 `logo.jpg` 生成全部应用图标；旧的内联 SVG / `GO` 生成逻辑已移除。
+- 已生成并替换：
+  - `frontend/icons/favicon-32.png`
+  - `frontend/icons/apple-touch-icon.png`
+  - `frontend/icons/icon-192.png`
+  - `frontend/icons/icon-512.png`
+  - `frontend/icons/icon-maskable-512.png`
+- `frontend/js/api.js` 会自动注入 `/icons/favicon-32.png`，同时保留 manifest 和 Apple touch icon 注入。
+- `frontend/sw.js` cache 版本更新为 `v47-2026-06-08-official-logo`，并预缓存 `logo.jpg` 与 `favicon-32.png`。
+- `frontend/login.html` 和 `frontend/index.html` 顶部应用标志已从内联 SVG 改为正式 logo 图片。
+- 页面可见 logo 放大到移动端可读尺寸，并通过截图确认无横向溢出。
+
+### 验证结果
+- `node --check scripts/generate-icons.js scripts/pwa-install-qa.js scripts/page-matrix-qa.js frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js` ✅
+- `node scripts/generate-icons.js` ✅，成功写出 favicon、Apple touch icon、192/512/maskable 图标。
+- HTML inline script syntax check：`frontend/login.html` 3 个 inline script、`frontend/index.html` 3 个 inline script 均通过 ✅
+- `file frontend/icons/logo.jpg frontend/icons/favicon-32.png frontend/icons/apple-touch-icon.png frontend/icons/icon-192.png frontend/icons/icon-512.png frontend/icons/icon-maskable-512.png` ✅：
+  - `logo.jpg` 为 617x565 JPEG
+  - `favicon-32.png` 为 32x32 PNG
+  - `apple-touch-icon.png` 为 180x180 PNG
+  - `icon-192.png` 为 192x192 PNG
+  - `icon-512.png` 为 512x512 PNG
+  - `icon-maskable-512.png` 为 512x512 PNG
+- `rg "logoSvg|>GO<|<svg width=\"26\"|<svg width=\"30\"" scripts/generate-icons.js frontend/login.html frontend/index.html frontend/icons -S` 无命中 ✅
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅，验证页面 logo、favicon、Apple touch icon、manifest icons、SW cache version 和安装态/浏览器态。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`。
+- `BASE=http://localhost:8781 node scripts/pwa-install-qa.js` ✅，默认端口只读验证通过。
+- 默认端口截图复查 ✅：`/tmp/glassorder-phase42-login-logo-final.png`、`/tmp/glassorder-phase42-index-logo-final.png`，登录页/入口页无横向溢出，正式 logo 显示清楚。
+- `git diff --check -- PLAN.md frontend scripts` ✅。
+
+## Phase 43：登录界面质感升级与全面 QA
+
+### 目标
+- 优化首次打开的登录页，让页面更正式、更有品牌感，减少“低配临时页面”的观感。
+- 保留当前登录逻辑、PWA 安装提示、语言切换和表单字段，不新增无关功能。
+- 登录页在移动端和桌面端都不能横向溢出，按钮/输入框不能重叠，正式 logo 必须清晰。
+
+### 任务
+- 重构 `frontend/login.html` 入口布局：
+  - 桌面端采用品牌展示区 + 登录面板的专业工作台布局。
+  - 移动端采用紧凑的品牌头部 + 登录表单布局。
+  - 保留 `#form`、`#login`、`#password`、`#submitBtn`，保证现有 QA 和登录逻辑不破坏。
+- 更新 `frontend/shared.css`：
+  - 新增登录页专用 class，减少 inline style。
+  - 控制 logo、标题、状态条、表单面板、安装/语言按钮的响应式尺寸。
+- 更新 i18n：
+  - 新增登录页品牌说明、工作流标签和安全提示文案。
+- 验证：
+  - 静态检查、HTML inline script 检查。
+  - Playwright 截图检查 mobile/desktop 登录页。
+  - 运行 `pwa-install-qa`、`page-matrix-qa`、`browser-qa`。
+
+### 验收标准
+- 登录页打开第一屏更有正式品牌感，logo 清晰，表单聚焦明确。
+- 移动端 390px 和桌面 1280px 均无横向溢出、无 console error、无文本重叠。
+- 登录表单 required、placeholder、错误提示和提交逻辑保持正常。
+- PWA 安装/已安装状态仍能正确显示和隐藏。
+- QA 只使用 codex QA 环境做写入型验证；默认端口最多做只读截图/PWA 检查。
+
+### 验证命令
+```bash
+bash scripts/build-i18n.sh
+node --check frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/pwa-install-qa.js
+node - <<'NODE'
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync('frontend/login.html', 'utf8');
+for (const [index, match] of [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].entries()) {
+  new vm.Script(match[1], { filename: `frontend/login.html#script${index + 1}` });
+}
+console.log('login inline scripts ok');
+NODE
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js
+git diff --check -- PLAN.md frontend scripts
+```
+
+### 执行状态
+- [x] 登录页 UI 重构
+- [x] i18n 与样式更新
+- [x] Playwright 视觉检查
+- [x] 回归 QA
+
+### 实施结果
+- `frontend/login.html` 已重构为桌面双区布局：左侧品牌展示区、右侧登录面板；移动端折叠为紧凑品牌头部 + 登录表单。
+- 登录页使用正式公司 logo，增加 PO、车间、取片三组业务状态提示，首屏观感更接近正式业务系统。
+- `frontend/shared.css` 新增登录页专用样式，控制背景、品牌区、表单卡片、语言/PWA 按钮、输入框和移动端断点；桌面和移动端均无横向溢出。
+- `frontend/js/i18n/zh.js`、`frontend/js/i18n/en.js` 新增登录页文案，并已重新生成 `frontend/js/i18n.js`。
+- `frontend/sw.js` cache 版本更新为 `v48-2026-06-08-login-ui`，确保登录页样式和新 logo 资源能刷新。
+- `scripts/pwa-install-qa.js` 已兼容本轮 login UI cache 版本检查，并继续验证 favicon、Apple touch icon、manifest icons 和页面 logo。
+
+### 验证结果（codex QA 隔离环境）
+- `bash scripts/build-i18n.sh` ✅，重新生成 `frontend/js/i18n.js`。
+- HTML inline script syntax check：`frontend/login.html` 3 个 inline script 均通过 ✅。
+- `node --check frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/pwa-install-qa.js scripts/ui-regression-qa.js` ✅。
+- Playwright 视觉检查 ✅：
+  - 桌面截图：`/tmp/glassorder-phase43-login-desktop-v3.png`
+  - 移动端截图：`/tmp/glassorder-phase43-login-mobile-v2.png`
+  - 1280px 桌面和 390px 移动端均确认无横向溢出、无按钮/文字重叠、logo 清晰。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js` ✅，覆盖登录 required/placeholders、auth redirect、dashboard 搜索/菜单、ready 确认、工人网格、取片确认、时间线、partial pickup 和归档菜单。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅，`UI REGRESSION QA PASS checks=18`。
+- 全面 QA 补充回归 ✅：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/navigation-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/motion-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh`
+- `git diff --check -- PLAN.md frontend scripts` ✅。
+- 服务状态：QA `http://localhost:8783/api/health` 正常；默认 `http://localhost:8781/api/health` 正常。
+- 数据隔离：本轮写入型验证继续使用 codex QA 环境；默认端口只用于只读视觉/PWA/健康检查。
+
+## Phase 44：取货二维码客户手机签字
+
+### 目标
+- 取货签字时不再把老板终端交给客户，避免客户通过返回、刷新或地址栏看到其他客户信息。
+- 老板在取货页选择本次取货片后生成二维码；客户用自己的手机扫码进入公开签字页。
+- 客户签字完成后，签名上传服务器并创建正式取货批次，老板端自动看到签字完成并跳转批次详情。
+- 公开签字页只暴露本次签收所需的最小信息，不依赖老板登录态，不显示客户列表、电话、邮箱或其他客户订单。
+
+### 任务
+- 数据模型：
+  - 新增 `pickup_sign_requests` 表，保存一次性签字请求、token hash、绑定客户、片 ID、过期时间、签字状态、签名文件、PDF、最终 `pickup_batch_id`。
+  - token 使用高强度随机值，数据库只保存 SHA-256 hash；默认 15 分钟有效，签完即失效。
+- 后端 API：
+  - 老板接口 `POST /api/pickups/sign-requests`：根据选中的 finished/unpicked/unhold 片生成一次性签字请求和二维码 SVG。
+  - 老板接口 `GET /api/pickups/sign-requests/:id`：轮询签字状态。
+  - 老板接口 `POST /api/pickups/sign-requests/:id/cancel`：取消当前二维码。
+  - 公开接口 `GET /api/pickups/sign/:token`：返回最小签收摘要。
+  - 公开接口 `POST /api/pickups/sign/:token`：校验 token、签名 PNG 和片状态，创建 pickup batch、生成 PDF、写事件并使 token 失效。
+- 前端：
+  - `pickup-search.html` 主按钮改为生成签字二维码，展示二维码、链接、倒计时/状态，并轮询签字结果。
+  - 新增 `customer-sign.html`，无老板导航/登录态，客户填写签收人姓名、可选电话、手写签名并提交。
+  - 签字完成页只提示“签收完成，请交还工作人员/通知工作人员”，不展示后台入口。
+- QA：
+  - 新增 API 级二维码签字 QA，覆盖无 token 拒绝、生成请求、公开页最小信息、客户签名创建批次、token 一次性、过期/取消拒绝、老板轮询可见。
+  - 新增/更新浏览器 QA，覆盖老板生成二维码、客户手机页签字、老板端自动跳转批次详情、客户页无敏感字段/无横向溢出。
+  - 保留旧批次直接创建 API 的回归，确保既有批次详情、回退、PDF 下载不破坏。
+
+### 验收标准
+- 客户不接触老板终端即可完成签收；老板页显示二维码并能自动感知签字完成。
+- 客户扫码页不需要登录，不读取/使用老板 token；页面只显示本次签收摘要和签名表单。
+- token 高强度随机、只存 hash、默认 15 分钟过期、签完或取消后不能再次使用。
+- 签名提交后创建 pickup batch，写入 signature PNG、pickup slip PDF、pickup items、pieces picked 状态和事件；订单取货状态正确更新。
+- 已 HOLD、未完成、已取货、归档或跨客户片不能生成/提交签字请求。
+- 移动端 390px 和桌面老板页无横向溢出、无 console error。
+- 写入型 QA 只跑 codex QA 环境；默认端口只做健康或只读验证。
+
+### 验证命令
+```bash
+bash scripts/build-i18n.sh
+node --check backend/db.js backend/routes/pickups.js backend/server.js frontend/js/api.js frontend/js/i18n.js frontend/js/i18n/zh.js frontend/js/i18n/en.js scripts/pickup-qr-sign-qa.js scripts/pickup-batch-browser-qa.js scripts/browser-qa.js scripts/page-matrix-qa.js scripts/pwa-install-qa.js
+node - <<'NODE'
+const fs = require('fs');
+const vm = require('vm');
+for (const file of ['frontend/pickup-search.html', 'frontend/customer-sign.html', 'frontend/pickup-batch-detail.html']) {
+  const html = fs.readFileSync(file, 'utf8');
+  for (const [index, match] of [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].entries()) {
+    new vm.Script(match[1], { filename: `${file}#script${index + 1}` });
+  }
+}
+console.log('inline scripts ok');
+NODE
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-qr-sign-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh
+git diff --check -- PLAN.md backend frontend scripts
+```
+
+### 执行状态
+- [x] 项目结构与现有取货签字链路复核
+- [x] 数据模型与后端二维码签字 API
+- [x] 老板取货页二维码 UI 与轮询
+- [x] 客户公开扫码签字页
+- [x] API/浏览器 QA 覆盖
+- [x] 全量验证与结果记录
+
+### 实施结果
+- 新增 `pickup_sign_requests` 迁移表：一次性签字请求保存 token hash、客户、片 ID、状态、过期时间、签名路径、PDF 路径和最终 `pickup_batch_id`；token 只以 SHA-256 hash 入库，默认 15 分钟有效。
+- `backend/routes/pickups.js` 新增二维码签收链路：
+  - `POST /api/pickups/sign-requests` 由老板生成一次性签字链接和二维码 SVG。
+  - `GET /api/pickups/sign-requests/:id` 供老板页轮询签字状态。
+  - `POST /api/pickups/sign-requests/:id/cancel` 可取消当前二维码。
+  - `GET /api/pickups/sign/:token` 公开读取最小签收摘要，不需要登录，不返回电话、邮箱、客户列表或后台信息。
+  - `POST /api/pickups/sign/:token` 公开提交签名；后端重新校验 token、过期状态、片子是否 finished/unpicked/unhold，同步创建 pickup batch、signature PNG、pickup slip PDF、pickup_items、piece picked 状态和事件。
+- 取货页 `frontend/pickup-search.html` 主流程改为生成签字二维码；二维码卡片显示 SVG、签字链接、倒计时、等待/完成/失效状态，并在签字完成后自动跳转批次详情。
+- 二维码待签期间，取货页片子选择被锁定；后端仍会在客户提交时二次校验，防止二维码生成后片子被 HOLD、回退或取走。
+- 新增公开页面 `frontend/customer-sign.html`：客户手机扫码后只看到公司 logo、本次客户公司名、订单/片摘要、取货人姓名、可选电话和签名板；签完显示中性完成提示，无后台导航和登录态要求。
+- 新增 `qrcode` 后端依赖用于本地生成二维码 SVG，避免依赖外部服务。
+- `frontend/sw.js` cache 版本更新为 `v49-2026-06-08-qr-sign`，并预缓存 `customer-sign.html`。
+- 更新 i18n、PWA QA、浏览器 QA、UI 回归和 select-all QA，覆盖新二维码签字主流程。
+- 保留旧 `POST /api/pickups/batches` 直接创建批次接口，避免破坏既有 API/回退/PDF 下载回归。
+
+### 验证结果（codex QA 隔离环境）
+- `bash scripts/build-i18n.sh` ✅，`frontend/js/i18n.js` 已重新生成。
+- 全量 JS 语法检查 ✅：`find backend frontend scripts -name '*.js' -not -path '*/node_modules/*' -print0 | sort -z | xargs -0 -n1 node --check`
+- HTML inline script syntax check ✅：17 个前端 HTML 页面内联脚本全部通过，包含 `customer-sign.html` 和 `pickup-search.html`。
+- i18n key 对齐 ✅：zh/en `483/483`。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-qr-sign-qa.js` ✅，覆盖无 token/worker 拒绝、token hash 存储、公开页最小信息、签名生成批次、token 一次性、取消/过期拒绝、HOLD 拒绝。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js` ✅，覆盖老板生成二维码、客户手机页签字、老板端自动跳转批次详情、批次搜索和回退。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/browser-qa.js` ✅，覆盖登录、dashboard、ready 确认、工人网格、二维码客户签收、时间线、剩余片和归档菜单。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/ui-regression-qa.js` ✅，移动端/桌面取货二维码页无横向溢出，按钮不裁切。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/page-matrix-qa.js` ✅，`PAGE MATRIX QA PASS checks=30`。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 ./scripts/smoke.sh` ✅，`SMOKE PASS`。
+- 补充回归均通过 ✅：
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/select-all-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-hold-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/piece-workflow-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/navigation-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/motion-browser-qa.js`
+  - `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/perf-check-worker.js`
+- `git diff --check -- PLAN.md backend frontend scripts` ✅。
+- 服务状态：QA `http://localhost:8783/api/health` 正常；默认 `http://localhost:8781/api/health` 正常。
+- 数据隔离：写入型验证全部使用 `ENV_FILE=backend/.env.codex-qa` / `BASE=http://localhost:8783`；默认服务只做健康/只读验证。
+
+## Phase 44 补充：客户签字页禁用安装提示
+
+### 目标
+- 客户扫码打开 `customer-sign.html` 后只完成一次性签名，不展示 PWA 安装提示或安装入口。
+- 老板/员工端继续保留 PWA 安装提示和安装态识别。
+
+### 任务
+- 在客户公开签字页增加页面级 PWA 安装禁用标记。
+- 让共享 `frontend/js/api.js` 在该标记存在时拦截 `beforeinstallprompt`、关闭安装/升级横幅、隐藏安装入口，并跳过 manifest/iOS 安装 meta 注入和主动 service worker 注册。
+- 更新 PWA QA，用 iPhone UA 验证客户签字页不会出现 iOS 安装提示，同时保留登录页/首页安装提示回归。
+- 递增 service worker cache 版本，确保已缓存共享脚本的浏览器能拿到本次修复。
+
+### 验收标准
+- `customer-sign.html?t=...` 在移动浏览器模式下不渲染 `install` / `ios-install` / `update-ready` PWA banner。
+- 手动触发 `beforeinstallprompt` 后，客户页仍不出现安装提示。
+- 客户签字页不注入 `link[rel="manifest"]`、`apple-mobile-web-app-capable` 或 `mobile-web-app-capable`。
+- 客户签字页不主动注册 service worker。
+- `login.html` 和 `index.html` 浏览器模式仍能显示安装入口；standalone 模式仍隐藏安装入口。
+- 客户二维码签字主流程不受影响。
+
+### 验证命令
+```bash
+node --check frontend/js/api.js scripts/pwa-install-qa.js
+node - <<'NODE'
+const fs = require('fs');
+const vm = require('vm');
+for (const file of ['frontend/customer-sign.html']) {
+  const html = fs.readFileSync(file, 'utf8');
+  for (const [index, match] of [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].entries()) {
+    new vm.Script(match[1], { filename: `${file}#script${index + 1}` });
+  }
+}
+console.log('customer inline scripts ok');
+NODE
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js
+ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js
+git diff --check -- PLAN.md frontend scripts
+```
+
+### 执行状态
+- [x] 方案和触发点复核
+- [x] 前端禁用安装提示实现
+- [x] PWA QA 增加客户页无安装提示覆盖
+- [x] 验证命令通过并记录结果
+
+### 实施结果
+- `frontend/customer-sign.html` 增加 `data-pwa-install="off"`，并刷新该页静态资源版本参数。
+- `frontend/js/api.js` 识别该页面级标记后：
+  - 不显示安装提示、iOS 安装提示或新版本刷新提示。
+  - 隐藏页面内安装入口。
+  - 不注入 manifest、Apple/Mobile Web App 安装 meta。
+  - 不主动注册 service worker。
+- `frontend/sw.js` cache 版本递增到 `v50-2026-06-08-customer-no-install`。
+- `scripts/pwa-install-qa.js` 增加客户签字页 iPhone 场景断言，确认客户页没有安装/升级横幅、manifest/meta 或 service worker 注册，同时保留员工端安装入口回归。
+
+### 验证结果
+- `node --check frontend/js/api.js scripts/pwa-install-qa.js` ✅。
+- `frontend/customer-sign.html` 内联脚本语法检查 ✅。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pwa-install-qa.js` ✅，`PWA INSTALL QA PASS`。
+- `ENV_FILE=backend/.env.codex-qa BASE=http://localhost:8783 node scripts/pickup-batch-browser-qa.js` ✅，二维码签字主流程仍通过。
+- `git diff --check -- PLAN.md frontend scripts` ✅。

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Customer Sign</title>
+<link rel="stylesheet" href="shared.css?v=20260608-customer-no-install">
+</head>
+<body class="customer-sign-body" data-pwa-install="off">
+<main class="customer-sign-shell">
+  <section class="customer-sign-brand">
+    <img src="icons/logo.jpg" alt="Sunshine Tempered Glass" class="customer-sign-logo">
+    <div>
+      <div class="customer-sign-kicker">SUNSHINE TEMPERED GLASS</div>
+      <h1 data-i18n="customerSignPageTitle">签收确认</h1>
+    </div>
+    <button class="lang-btn customer-sign-lang" onclick="toggleLang()" type="button">EN</button>
+  </section>
+
+  <section id="state" class="card customer-sign-card">
+    <div class="empty-state" data-i18n="customerSignLoading">正在读取签收信息...</div>
+  </section>
+</main>
+
+<script src="js/api.js?v=20260608-customer-no-install"></script>
+<script src="js/i18n.js?v=20260608-customer-no-install"></script>
+<script>
+const token = new URLSearchParams(location.search).get('t') || '';
+let signData = null;
+let canvas = null;
+let ctx = null;
+let drawing = false;
+let last = null;
+let signatureEmpty = true;
+
+function pieceLine(piece) {
+  return [piece.size, piece.thickness, piece.type, piece.weight].filter(Boolean).join(' · ');
+}
+
+function renderLoaded() {
+  const el = document.getElementById('state');
+  const orders = signData.orders || [];
+  el.innerHTML = `
+    <div class="customer-sign-copy">
+      <div class="row-title">${esc(signData.customer.company || '')}</div>
+      <div class="row-sub">${esc(t('customerSignIntro'))}</div>
+      <div class="customer-sign-privacy">${esc(t('customerSignPrivacy'))}</div>
+    </div>
+    ${renderStatCells([
+      { value: signData.summary.total_pieces || 0, label: t('customerSignTotal') },
+      { value: signData.summary.order_count || orders.length, label: t('customerSignOrderCount') },
+    ], { className: 'metrics-grid customer-sign-metrics' })}
+    <div class="customer-sign-orders">
+      ${orders.map((order) => `
+        <section class="customer-sign-order">
+          <div class="row-title">${esc(orderCodeText(order))}</div>
+          ${order.project_name ? `<div class="row-sub">${esc(order.project_name)}</div>` : ''}
+          ${(order.pieces || []).map((piece) => `
+            <div class="customer-sign-piece">
+              <span>${esc(tn('pieceN', { n: piece.piece_no }))}</span>
+              <em>${esc(pieceLine(piece))}</em>
+            </div>`).join('')}
+        </section>`).join('')}
+    </div>
+    <label class="form-label" for="signerName">${esc(t('signerName'))}</label>
+    <input class="form-input" id="signerName" autocomplete="name" placeholder="${escAttr(t('signerNamePh'))}">
+    <label class="form-label customer-sign-field-gap" for="signerPhone">${esc(t('contactPhone'))}</label>
+    <input class="form-input" id="signerPhone" autocomplete="tel" placeholder="${escAttr(t('signerPhonePh'))}">
+    <label class="form-label customer-sign-field-gap">${esc(t('customerSignRequired'))}</label>
+    <canvas id="customerSig" class="sig-pad customer-sign-pad"></canvas>
+    <div class="customer-sign-actions">
+      <button class="btn btn-ghost" type="button" onclick="clearSignature()">${esc(t('clearSig'))}</button>
+      <button class="btn btn-success" id="submitSignBtn" type="button" onclick="submitSignature(event)">${esc(t('customerSignSubmit'))}</button>
+    </div>`;
+  bindSignaturePad();
+}
+
+function renderInactive(titleKey = 'customerSignExpiredTitle', bodyKey = 'customerSignExpiredBody') {
+  document.getElementById('state').innerHTML = `
+    <div class="empty-state customer-sign-terminal">
+      <strong>${esc(t(titleKey))}</strong>
+      <span>${esc(t(bodyKey))}</span>
+    </div>`;
+}
+
+function resizeCanvas() {
+  if (!canvas || !ctx) return;
+  const ratio = window.devicePixelRatio || 1;
+  const w = canvas.offsetWidth;
+  const h = canvas.offsetHeight;
+  if (!w || !h) return;
+  canvas.width = w * ratio;
+  canvas.height = h * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = '#18181b';
+  ctx.lineCap = 'round';
+}
+
+function pos(event) {
+  const rect = canvas.getBoundingClientRect();
+  const point = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]) || event;
+  return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+}
+
+function start(event) {
+  drawing = true;
+  last = pos(event);
+  if (canvas.setPointerCapture && event.pointerId !== undefined) {
+    try { canvas.setPointerCapture(event.pointerId); } catch (_) {}
+  }
+  event.preventDefault();
+}
+
+function move(event) {
+  if (!drawing) return;
+  const point = pos(event);
+  ctx.beginPath();
+  ctx.moveTo(last.x, last.y);
+  ctx.lineTo(point.x, point.y);
+  ctx.stroke();
+  last = point;
+  signatureEmpty = false;
+  event.preventDefault();
+}
+
+function end(event) {
+  drawing = false;
+  last = null;
+  if (canvas && canvas.releasePointerCapture && event && event.pointerId !== undefined) {
+    try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+  }
+}
+
+function clearSignature() {
+  if (!ctx || !canvas) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  signatureEmpty = true;
+}
+
+function bindSignaturePad() {
+  canvas = document.getElementById('customerSig');
+  ctx = canvas.getContext('2d');
+  signatureEmpty = true;
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('pointerleave', end);
+  canvas.addEventListener('touchstart', start, { passive:false });
+  canvas.addEventListener('touchmove', move, { passive:false });
+  canvas.addEventListener('touchend', end);
+  canvas.addEventListener('touchcancel', end);
+}
+
+async function loadSignRequest() {
+  if (!token) {
+    renderInactive('customerSignExpiredTitle', 'customerSignNoToken');
+    return;
+  }
+  try {
+    signData = await api('/api/pickups/sign/' + encodeURIComponent(token), { auth: false });
+    renderLoaded();
+  } catch (err) {
+    renderInactive();
+  }
+}
+
+async function submitSignature(event) {
+  const name = document.getElementById('signerName').value.trim();
+  if (!name) return toast(t('sigEmptyName'), { type:'danger' });
+  if (signatureEmpty) return toast(t('sigEmptySign'), { type:'danger' });
+  const btn = event && event.currentTarget;
+  await withBusy(btn, async () => {
+    btn.textContent = t('customerSignSubmitting');
+    await api('/api/pickups/sign/' + encodeURIComponent(token), {
+      method: 'POST',
+      auth: false,
+      body: {
+        signer_name: name,
+        signer_phone: document.getElementById('signerPhone').value.trim(),
+        signature_base64: canvas.toDataURL('image/png'),
+      },
+    });
+    document.getElementById('state').innerHTML = `
+      <div class="empty-state customer-sign-terminal success">
+        <strong>${esc(t('customerSignDoneTitle'))}</strong>
+        <span>${esc(t('customerSignDoneBody'))}</span>
+      </div>`;
+  }).catch((err) => {
+    toast(err.message, { type:'danger' });
+    if (btn) btn.textContent = t('customerSignSubmit');
+  });
+}
+
+function onLangChange() {
+  if (signData) renderLoaded();
+}
+
+loadSignRequest();
+</script>
+</body>
+</html>

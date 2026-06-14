@@ -106,7 +106,7 @@ async function expectNoConsoleErrors(page, fn) {
 }
 
 async function drawSignature(page) {
-  const box = await page.locator('#sig').boundingBox();
+  const box = await page.locator('#customerSig').boundingBox();
   if (!box) throw new Error('signature canvas missing');
   const points = [
     { clientX: box.x + 30, clientY: box.y + 30 },
@@ -114,11 +114,18 @@ async function drawSignature(page) {
     { clientX: box.x + 110, clientY: box.y + 48 },
     { clientX: box.x + 150, clientY: box.y + 34 },
   ];
-  await page.dispatchEvent('#sig', 'pointerdown', { ...points[0], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+  await page.dispatchEvent('#customerSig', 'pointerdown', { ...points[0], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
   for (const point of points.slice(1)) {
-    await page.dispatchEvent('#sig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
+    await page.dispatchEvent('#customerSig', 'pointermove', { ...point, pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 1 });
   }
-  await page.dispatchEvent('#sig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+  await page.dispatchEvent('#customerSig', 'pointerup', { ...points[points.length - 1], pointerId: 1, pointerType: 'touch', isPrimary: true, buttons: 0 });
+}
+
+async function waitSelectedCount(page, expected) {
+  await page.waitForFunction((n) => (
+    document.querySelectorAll('[data-piece]:checked').length === n
+      && new RegExp(`(已选 ${n} 片|${n} selected)`, 'i').test(document.querySelector('#pickupStepper')?.textContent || '')
+  ), expected, { timeout: 10000 });
 }
 
 async function dashboardStatValues(page) {
@@ -355,31 +362,48 @@ async function main() {
       const piecesFromLegacy = await page.locator('[data-piece]').count();
       if (piecesFromLegacy !== 8) throw new Error(`legacy pickup-sign redirect should show 8 selectable pieces, got ${piecesFromLegacy}`);
       await page.locator('[data-piece]').nth(0).check();
-      await page.waitForFunction(() => /已选 1 片|1 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
+      await waitSelectedCount(page, 1);
       await page.locator('[data-piece]').nth(2).check();
-      await page.waitForFunction(() => /已选 2 片|2 selected/.test(document.querySelector('#selectedSummary')?.textContent || ''), null, { timeout: 10000 });
-      await page.fill('#name', 'Browser QA Signer');
-      await page.fill('#phone', '403-555-1212');
-      const signatureOptionalText = await page.locator('#signatureCard').textContent();
-      if (!/可选|optional/i.test(signatureOptionalText || '')) {
-        throw new Error(`pickup signature should be optional: ${signatureOptionalText}`);
-      }
+      await waitSelectedCount(page, 2);
       await page.locator('#submitBtn').click();
       await page.waitForSelector('.modal-backdrop.open');
       const pickupModal = await page.locator('.modal-backdrop.open').textContent();
-      if (!/确认取货|Confirm Pickup/i.test(pickupModal || '')) {
-        throw new Error('Q4 pickup confirmation modal missing');
+      if (!/签字二维码|Signing QR|二维码/i.test(pickupModal || '')) {
+        throw new Error(`Q4 pickup QR confirmation modal missing: ${pickupModal}`);
       }
       await page.locator('.modal-backdrop.open [data-role="ok"]').click();
+      await page.waitForSelector('#qrCard:not([style*="display:none"]) svg', { timeout: 10000 });
+      const signUrl = await page.locator('#qrLink').textContent();
+      if (!/customer-sign\.html\?t=/.test(signUrl || '')) throw new Error(`Q4 pickup QR url missing: ${signUrl}`);
+      const disabledWhileQr = await page.locator('[data-piece]:disabled').count();
+      if (disabledWhileQr < 2) throw new Error(`pickup QR should lock selected piece checks, disabled=${disabledWhileQr}`);
+
+      const customerPage = await context.newPage();
+      await customerPage.goto(signUrl.trim(), { waitUntil: 'networkidle' });
+      await customerPage.waitForSelector('#customerSig', { timeout: 10000 });
+      const customerSignText = await customerPage.locator('body').textContent();
+      if (!/签收确认|Pickup Sign-off/.test(customerSignText || '') || !/本次取货|Pickup pieces/.test(customerSignText || '')) {
+        throw new Error(`customer QR sign page missing summary: ${customerSignText}`);
+      }
+      if (/客户管理|Customers|403-555|example\.test/.test(customerSignText || '')) {
+        throw new Error(`customer QR sign page leaked sensitive/admin text: ${customerSignText}`);
+      }
+      await customerPage.fill('#signerName', 'Browser QA Signer');
+      await customerPage.fill('#signerPhone', '403-555-1212');
+      await drawSignature(customerPage);
+      await customerPage.locator('#submitSignBtn').click();
+      await customerPage.waitForFunction(() => /签收完成|Signature Submitted/.test(document.body.textContent || ''), null, { timeout: 10000 });
+      await customerPage.close();
+
       await page.waitForURL(/pickup-batch-detail\.html\?id=/, { timeout: 15000 });
       const createdBatchId = new URL(page.url()).searchParams.get('id');
-      const unsignedBatch = await api(`/api/pickups/batches/${createdBatchId}`, { headers: authHeaders(session) });
-      if (unsignedBatch.batch.signature_path) throw new Error('unsigned browser pickup should not store signature_path');
+      const signedBatch = await api(`/api/pickups/batches/${createdBatchId}`, { headers: authHeaders(session) });
+      if (!signedBatch.batch.signature_path) throw new Error('QR signed browser pickup should store signature_path');
       const batchText = await page.locator('#body').textContent();
       if (!/第 1 片|Piece #1/.test(batchText || '') || !/第 3 片|Piece #3/.test(batchText || '') || !/订单数|Orders/.test(batchText || '')) {
         throw new Error('Q4 piece-level pickup batch detail missing selected pieces');
       }
-      checks.push('Q4 piece-level pickup confirm modal');
+      checks.push('Q4 QR customer pickup sign-off');
 
       // Q5 detail timeline after partial piece-level pickup.
       await page.goto(BASE + `/boss-order-detail.html?id=${seeded.orderId}`, { waitUntil: 'networkidle' });
@@ -393,7 +417,6 @@ async function main() {
       await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
       await page.fill('#customerPicker input[type="search"]', seeded.company);
       await page.locator(`.customer-picker-option[data-id="${seeded.customerId}"]`).click();
-      await page.waitForSelector('#available [data-piece]');
       const remainingAvailable = await api(`/api/pickups/available?customer_id=${seeded.customerId}`, { headers: authHeaders(session) });
       const remainingPieceIds = (remainingAvailable.pieces || [])
         .filter((item) => Number(item.order_id) === Number(seeded.orderId))
@@ -401,6 +424,11 @@ async function main() {
       if (remainingPieceIds.length !== 6) {
         throw new Error(`expected 6 remaining pieces before final pickup, got ${remainingPieceIds.length}`);
       }
+      await page.waitForFunction((ids) => {
+        const visible = [...document.querySelectorAll('#available [data-piece]')]
+          .filter((input) => ids.includes(Number(input.dataset.piece)));
+        return visible.length === ids.length;
+      }, remainingPieceIds, { timeout: 10000 });
       const visibleRemainingPieces = await page.locator('#available [data-piece]').evaluateAll((inputs, ids) => (
         inputs.filter((input) => ids.includes(Number(input.dataset.piece))).length
       ), remainingPieceIds);

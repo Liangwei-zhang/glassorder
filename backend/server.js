@@ -71,6 +71,11 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/orders', orderRoutes);

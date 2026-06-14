@@ -211,6 +211,14 @@ function migrateDb() {
       },
     },
     {
+      name: 'phase50_piece_tag',
+      run() {
+        if (!columnExists('pieces', 'tag')) {
+          db.exec('ALTER TABLE pieces ADD COLUMN tag TEXT');
+        }
+      },
+    },
+    {
       name: 'phase39_order_number_po_key',
       run() {
         if (!columnExists('orders', 'order_number_key')) {
@@ -232,6 +240,41 @@ function migrateDb() {
             WHERE order_number_key IS NOT NULL AND order_number_key <> ''
           `);
         }
+      },
+    },
+    {
+      name: 'phase44_pickup_qr_sign_requests',
+      run() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS pickup_sign_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash TEXT NOT NULL UNIQUE,
+            customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+            piece_ids TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'signed', 'cancelled', 'expired')),
+            signer_name TEXT,
+            signer_phone TEXT,
+            signature_path TEXT NOT NULL DEFAULT '',
+            slip_pdf_path TEXT NOT NULL DEFAULT '',
+            pickup_batch_id INTEGER REFERENCES pickup_batches(id) ON DELETE SET NULL,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at TEXT NOT NULL,
+            signed_at TEXT,
+            cancelled_at TEXT,
+            cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            cancel_reason TEXT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_pickup_sign_requests_customer
+          ON pickup_sign_requests(customer_id, status, expires_at);
+
+          CREATE INDEX IF NOT EXISTS idx_pickup_sign_requests_batch
+          ON pickup_sign_requests(pickup_batch_id);
+
+          CREATE INDEX IF NOT EXISTS idx_pickup_sign_requests_created_by
+          ON pickup_sign_requests(created_by, created_at);
+        `);
       },
     },
   ];
@@ -310,6 +353,7 @@ function initDb() {
       thickness TEXT,
       weight TEXT,
       piece_note TEXT,
+      tag TEXT,
       drawing_path TEXT,
       UNIQUE(order_id, piece_no)
     );

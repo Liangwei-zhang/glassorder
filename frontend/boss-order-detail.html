@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Order Detail</title>
-<link rel="stylesheet" href="shared.css?v=20260609-piece-labels">
+<link rel="stylesheet" href="shared.css?v=20260610-label-sizes">
 </head>
 <body>
 <div class="topbar">
@@ -44,12 +44,29 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260609-piece-labels"></script>
-<script src="js/i18n.js?v=20260609-piece-labels"></script>
+<script src="js/api.js?v=20260610-label-sizes"></script>
+<script src="js/i18n.js?v=20260610-label-sizes"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 const id = new URLSearchParams(location.search).get('id');
 let order = null;
+const LABEL_SIZE_KEY = 'glassorder_label_size';
+const LABEL_SIZES = ['100x150', '80x60'];
+
+function getLabelSize() {
+  const saved = localStorage.getItem(LABEL_SIZE_KEY);
+  return LABEL_SIZES.includes(saved) ? saved : '100x150';
+}
+
+function setLabelSize(size) {
+  if (!LABEL_SIZES.includes(size)) return;
+  localStorage.setItem(LABEL_SIZE_KEY, size);
+  document.querySelectorAll('[data-label-size]').forEach((btn) => {
+    const active = btn.dataset.labelSize === size;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
 
 async function loadOrder() {
   if (!order) {
@@ -233,6 +250,7 @@ function renderTimeline(events) {
 function renderLabelTools(order) {
   const pieces = order.pieces || [];
   if (!pieces.length) return '';
+  const labelSize = getLabelSize();
   const rows = pieces.map((piece) => `
     <div class="row" style="padding:10px 0;">
       <div style="flex:1; min-width:0;">
@@ -249,6 +267,11 @@ function renderLabelTools(order) {
           <div style="font-size:12px; color:var(--text-2); margin-top:3px;">${esc(tn('pieceLabelsSubN', { n: pieces.length }))}</div>
         </div>
         <button class="btn btn-primary btn-inline-compact" type="button" onclick="generatePieceLabels(event)">${esc(t('printAllPieceLabels'))}</button>
+      </div>
+      <div class="label-size-control" role="group" aria-label="${escAttr(t('labelPaperSize'))}">
+        <span>${esc(t('labelPaperSize'))}</span>
+        <button class="label-size-option ${labelSize === '100x150' ? 'active' : ''}" type="button" data-label-size="100x150" aria-pressed="${labelSize === '100x150' ? 'true' : 'false'}" onclick="setLabelSize('100x150')">100 x 150</button>
+        <button class="label-size-option ${labelSize === '80x60' ? 'active' : ''}" type="button" data-label-size="80x60" aria-pressed="${labelSize === '80x60' ? 'true' : 'false'}" onclick="setLabelSize('80x60')">80 x 60</button>
       </div>
       <div style="margin-top:10px; border-top:1px solid var(--border-2); max-height:360px; overflow:auto;">
         ${rows}
@@ -294,6 +317,7 @@ async function generatePieceLabels(ev, pieceId) {
   try {
     await withBusy(btn, async () => {
       const body = pieceId ? { piece_ids: [Number(pieceId)] } : {};
+      body.label_size = getLabelSize();
       const data = await api('/api/orders/' + order.id + '/labels', {
         method: 'POST',
         body,
@@ -331,7 +355,7 @@ function openOrderMenu(event) {
 }
 
 function pieceStepChecked(piece, step) {
-  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
   return required.includes(step) ? 'checked' : '';
 }
 

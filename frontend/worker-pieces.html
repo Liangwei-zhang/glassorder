@@ -60,7 +60,7 @@
     </div>
     <div id="mDrawing" style="margin-bottom: 12px; background: #fafafa; border-radius: 10px; overflow: hidden; cursor: zoom-in; position: relative;" onclick="openFullDrawing()"></div>
     <div id="mStatus" style="padding: 12px; background: var(--surface-2); border-radius: 10px; margin-bottom: 12px; text-align:center; font-size: 14px;"></div>
-    <div id="mActions" style="display:flex; flex-direction: column; gap: 10px;"></div>
+    <div id="mActions" class="piece-action-stack"></div>
     <div id="mAdvanced" style="margin-top: 14px; text-align:center; font-size:13px;"></div>
     <button class="btn btn-ghost" style="width:100%; margin-top: 14px;" onclick="closeModal()" data-i18n="close">关闭</button>
   </div>
@@ -126,6 +126,7 @@ let selectMode = false;
 let selectedIds = new Set();
 let rangeAnchorId = null;
 let suppressNextCellAnimation = false;
+const DEFAULT_REQUIRED_STEPS = ['cut', 'edge', 'tempered'];
 
 const referer = document.referrer || '';
 const _user = (typeof getUser === 'function' ? getUser() : null) || {};
@@ -221,6 +222,7 @@ function render() {
   const empty = document.getElementById('empty');
   if (pieces.length === 0) {
     grid.style.display = 'none';
+    grid.innerHTML = '';
     empty.style.display = 'block';
   } else {
     grid.style.display = 'grid';
@@ -263,7 +265,7 @@ function renderActionBar() {
       <button class="btn btn-ghost back" onclick="exitSelectMode()">${esc(t('cancel'))}</button>
       <button class="btn btn-ghost" id="selectAllViewBtn" ${view.length === 0 || selectedInView === view.length ? 'disabled style="opacity:.5;"' : ''} onclick="selectAllInView()">${esc(t('selectAll'))}</button>
       <button class="btn btn-ghost" id="clearSelectionBtn" ${n === 0 ? 'disabled style="opacity:.5;"' : ''} onclick="clearSelection()">${esc(t('clearSelection'))}</button>
-      <button class="btn btn-success" ${dis} onclick="batchAction('complete')">${esc(t('batchComplete'))} ${n ? '(' + n + ')' : ''}</button>
+      <button class="btn btn-success" ${dis} onclick="batchAction('advance')">${esc(t('batchComplete'))} ${n ? '(' + n + ')' : ''}</button>
       <button class="menu-trigger" ${n === 0 ? 'disabled style="opacity:.45;"' : ''} onclick="openBatchMenu(event)" aria-label="more">⋯</button>`;
     document.getElementById('selectToggle').classList.add('on');
     document.getElementById('selectToggle').textContent = t('exitSelect');
@@ -366,43 +368,58 @@ function openPieceModal(id) {
   else if (p.hold) statusHtml = `<b style="color: var(--warn);">${esc(t('statusHoldLine'))}</b>`;
   else if (p.stage === 'finished') statusHtml = `<b style="color: var(--success);">${esc(t('statusFinishedLine'))}</b>`;
   else statusHtml = `<b>${esc(tn('statusCurrentLine', { stage: stageLabel(p.stage) }))}</b>`;
-  const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
+  const required = p.required_steps || (p.process_config && p.process_config.required_steps) || DEFAULT_REQUIRED_STEPS;
   const requiredText = required.map(s => stageLabel(s)).join(' → ');
   document.getElementById('mStatus').innerHTML = `${statusHtml}<div style="margin-top:6px; color: var(--text-2); font-size:12px;">${esc(t('requiredSteps'))}: ${esc(requiredText)}</div>`;
 
   const ab = document.getElementById('mActions');
   const adv = document.getElementById('mAdvanced');
-  if (p.stage === 'finished') {
-    ab.innerHTML = `<div style="text-align:center; color: var(--text-2);">${esc(t('pieceFinishedAll'))}</div>`;
+  if (p.hold) {
+    ab.innerHTML = `<button class="btn btn-ghost tap-lg" type="button" onclick="toggleHold(event)">${esc(t('unholdBtn'))}</button>
+      <button class="btn btn-danger tap-lg" type="button" onclick="askBroken()">${esc(t('brokenBtn'))}</button>`;
     adv.innerHTML = '';
-  } else if (p.hold) {
-    ab.innerHTML = `<button class="btn btn-ghost tap-lg" onclick="toggleHold(event)">${esc(t('unholdBtn'))}</button>
-      <button class="btn btn-danger tap-lg" onclick="askBroken()">${esc(t('brokenBtn'))}</button>`;
+  } else if (p.stage === 'finished') {
+    const canPolish = required.includes('tempered') && !required.includes('polish') && (p.completed_steps || []).includes('tempered');
+    ab.innerHTML = `<div class="piece-action-section piece-action-section-success">
+        <div class="piece-action-title">${esc(t('pieceFinishedAll'))}</div>
+      </div>
+      <div class="piece-action-section">
+        <div class="piece-action-label">${esc(t('finishedPieceFollowupActions'))}</div>
+        <div class="piece-action-buttons">
+          ${canPolish ? `<button class="btn btn-warn tap-lg" type="button" onclick="sendCurrentPieceToPolish(event)">${esc(t('sendToPolishBtn'))}</button>` : ''}
+          <button class="btn btn-ghost tap-lg" type="button" onclick="returnCurrentPiecePrevious(event)">${esc(t('returnPreviousBtn'))}</button>
+        </div>
+        ${canPolish ? `<div class="piece-action-help">${esc(t('sendToPolishHint'))}</div>` : ''}
+      </div>
+      <div class="piece-action-section piece-action-section-danger">
+        <div class="piece-action-label">${esc(t('finishedPieceReworkActions'))}</div>
+        <button class="btn btn-danger tap-lg" type="button" onclick="redoCurrentPiece(event)">${esc(t('redoPieceBtn'))}</button>
+      </div>`;
     adv.innerHTML = '';
   } else {
     const nextLabel = p.next_step
       ? tn('completeStep', { step: stageLabel(p.next_step) })
       : t('completeAll');
-    ab.innerHTML = `<button class="btn btn-success tap-lg" onclick="completeStage()">${esc(nextLabel)}</button>
-      <button class="btn btn-danger tap-lg" onclick="askBroken()">${esc(t('brokenBtn'))}</button>
-      <button class="btn btn-warn" onclick="toggleHold(event)">${esc(t('holdBtn'))}</button>`;
-    const required = p.required_steps || (p.process_config && p.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
-    const isCustom = required.length !== 4
+    ab.innerHTML = `<button class="btn btn-success tap-lg" type="button" onclick="completeStage()">${esc(nextLabel)}</button>
+      <button class="btn btn-danger tap-lg" type="button" onclick="askBroken()">${esc(t('brokenBtn'))}</button>
+      <button class="btn btn-warn" type="button" onclick="toggleHold(event)">${esc(t('holdBtn'))}</button>`;
+    const required = p.required_steps || (p.process_config && p.process_config.required_steps) || DEFAULT_REQUIRED_STEPS;
+    const isCustom = required.length !== DEFAULT_REQUIRED_STEPS.length
       || !required.includes('cut') || !required.includes('edge')
-      || !required.includes('tempered') || !required.includes('polish');
+      || !required.includes('tempered');
     const advLinks = [];
     const isMirror = required.length === 1 && required[0] === 'cut';
     if (required.includes('tempered')) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','polish'])">${esc(t('skipTempered'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge'])">${esc(t('skipTempered'))}</button>`);
     }
     if (required.includes('edge')) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered','polish'])">${esc(t('skipOpening'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered'])">${esc(t('skipOpening'))}</button>`);
     }
     if (!isMirror) {
       advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut'])">${esc(t('mirrorOnly'))}</button>`);
     }
     if (isCustom) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge','tempered','polish'])">${esc(t('restoreSteps'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(DEFAULT_REQUIRED_STEPS)">${esc(t('restoreSteps'))}</button>`);
     }
     adv.innerHTML = advLinks.join(' · ');
   }
@@ -451,10 +468,10 @@ function openBatchMenu(event) {
     { label: t('batchHold'), onClick: () => batchAction('hold') },
     { label: t('batchUnhold'), onClick: () => batchAction('unhold') },
     { divider: true },
-    { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered','polish']) },
-    { label: t('noTempered'), onClick: () => batchConfig(['cut','edge','polish']) },
+    { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered']) },
+    { label: t('noTempered'), onClick: () => batchConfig(['cut','edge']) },
     { label: t('batchMirror'), onClick: () => batchConfig(['cut']) },
-    { label: t('restoreAllSteps'), onClick: () => batchConfig(['cut','edge','tempered','polish']) },
+    { label: t('restoreAllSteps'), onClick: () => batchConfig(DEFAULT_REQUIRED_STEPS) },
     { divider: true },
     { label: t('batchBroken'), danger: true, onClick: () => batchAction('broken') },
   ];
@@ -1125,6 +1142,58 @@ async function toggleHold(ev) {
     suppressNextCellAnimation = true;
     closeModal();
     render();
+  }).catch(err => toast(err.message, { type: 'danger' }));
+}
+
+async function sendCurrentPieceToPolish(ev) {
+  if (!currentPiece) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pieces/' + currentPiece.id + '/send-polish', { method: 'POST' });
+    patchPieces([data.piece]);
+    suppressNextCellAnimation = true;
+    closeModal();
+    setStageTab('polish');
+    toast(tn('pieceSentToPolish', { n: data.piece.piece_no }), { type: 'success' });
+  }).catch(err => toast(err.message, { type: 'danger' }));
+}
+
+async function returnCurrentPiecePrevious(ev) {
+  if (!currentPiece) return;
+  const ok = await confirmModal({
+    title: tn('returnPreviousConfirmTitle', { n: currentPiece.piece_no }),
+    body: t('returnPreviousConfirmBody'),
+    confirmText: t('returnPreviousBtn'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pieces/' + currentPiece.id + '/return-previous', { method: 'POST' });
+    patchPieces([data.piece]);
+    suppressNextCellAnimation = true;
+    closeModal();
+    setStageTab(data.piece.stage);
+    toast(tn('pieceReturnedPrevious', { n: data.piece.piece_no, stage: stageLabel(data.piece.stage) }), { type: 'success' });
+  }).catch(err => toast(err.message, { type: 'danger' }));
+}
+
+async function redoCurrentPiece(ev) {
+  if (!currentPiece) return;
+  const ok = await confirmModal({
+    title: tn('redoPieceConfirmTitle', { n: currentPiece.piece_no }),
+    body: t('redoPieceConfirmBody'),
+    confirmText: t('redoPieceBtn'),
+    danger: true,
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pieces/' + currentPiece.id + '/redo', { method: 'POST' });
+    patchPieces([data.piece]);
+    suppressNextCellAnimation = true;
+    closeModal();
+    setStageTab('cut');
+    toast(tn('pieceBackToCut', { n: data.piece.piece_no }), { type: 'danger' });
   }).catch(err => toast(err.message, { type: 'danger' }));
 }
 

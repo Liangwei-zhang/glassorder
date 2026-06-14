@@ -1,4 +1,5 @@
-const LEGACY_STEPS = ['cut', 'edge', 'tempered'];
+const DEFAULT_STEPS = ['cut', 'edge', 'tempered'];
+const LEGACY_STEPS = DEFAULT_STEPS;
 const ALL_STEPS = ['cut', 'edge', 'tempered', 'polish'];
 const DISPLAY_STAGES = ['cut', 'edge', 'tempered', 'polish', 'finished'];
 
@@ -15,7 +16,7 @@ function parseJSON(value, fallback) {
 function normalizeRequiredSteps(value, options = {}) {
   const fallbackSteps = Array.isArray(options.fallbackSteps) && options.fallbackSteps.length
     ? options.fallbackSteps
-    : ALL_STEPS;
+    : DEFAULT_STEPS;
   const parsed = parseJSON(value, value);
   const raw = Array.isArray(parsed)
     ? parsed
@@ -56,9 +57,7 @@ function inferCompletedFromStage(stage, requiredSteps) {
 
 function hydratePieceWorkflow(piece) {
   if (!piece) return piece;
-  const requiredSteps = normalizeRequiredSteps(piece.process_config, {
-    fallbackSteps: piece.process_config ? ALL_STEPS : LEGACY_STEPS,
-  });
+  const requiredSteps = normalizeRequiredSteps(piece.process_config, { fallbackSteps: DEFAULT_STEPS });
   let completedSteps = normalizeCompletedSteps(piece.completed_steps);
   if (!completedSteps.length && piece.stage && piece.stage !== 'cut') {
     completedSteps = inferCompletedFromStage(piece.stage, requiredSteps);
@@ -94,6 +93,43 @@ function advancePieceState(piece, { completeAll = false } = {}) {
   };
 }
 
+function sendPieceToPolishState(piece) {
+  const hydrated = hydratePieceWorkflow(piece);
+  if (!hydrated.required_steps.includes('tempered') || !hydrated.completed_steps.includes('tempered')) {
+    return null;
+  }
+  const requiredSteps = hydrated.required_steps.includes('polish')
+    ? hydrated.required_steps
+    : [...hydrated.required_steps, 'polish'];
+  const completedSteps = hydrated.completed_steps.filter((step) => step !== 'polish');
+  return {
+    stage: 'polish',
+    required_steps: requiredSteps,
+    completed_steps: completedSteps,
+  };
+}
+
+function returnPreviousPieceState(piece) {
+  const hydrated = hydratePieceWorkflow(piece);
+  const completedSteps = [...hydrated.completed_steps];
+  if (!completedSteps.length) return null;
+  const stage = completedSteps.pop();
+  return {
+    stage,
+    completed_steps: completedSteps,
+    required_steps: hydrated.required_steps,
+  };
+}
+
+function redoPieceState(piece) {
+  const hydrated = hydratePieceWorkflow(piece);
+  return {
+    stage: 'cut',
+    completed_steps: [],
+    required_steps: hydrated.required_steps,
+  };
+}
+
 function processConfigJSON(requiredSteps) {
   return JSON.stringify({ required_steps: normalizeRequiredSteps(requiredSteps) });
 }
@@ -113,6 +149,7 @@ function workflowSummary(piece) {
 
 module.exports = {
   ALL_STEPS,
+  DEFAULT_STEPS,
   DISPLAY_STAGES,
   LEGACY_STEPS,
   advancePieceState,
@@ -120,5 +157,8 @@ module.exports = {
   hydratePieceWorkflow,
   normalizeRequiredSteps,
   processConfigJSON,
+  redoPieceState,
+  returnPreviousPieceState,
+  sendPieceToPolishState,
   workflowSummary,
 };

@@ -367,7 +367,7 @@ function closeDashboardEdit() {
 }
 
 function pieceStepChecked(piece, step) {
-  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered', 'polish'];
+  const required = piece.required_steps || (piece.process_config && piece.process_config.required_steps) || ['cut', 'edge', 'tempered'];
   return required.includes(step) ? 'checked' : '';
 }
 

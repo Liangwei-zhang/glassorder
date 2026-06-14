@@ -5,7 +5,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE || 'http://localhost:8781';
-const WORKFLOW_STEPS = ['cut', 'edge', 'tempered', 'polish'];
+const WORKFLOW_STEPS = ['cut', 'edge', 'tempered'];
 const ROOT = path.join(__dirname, '..');
 const SAMPLE_PDF = path.join(ROOT, 'Glass Order - 2605011 Inspire --8 Heritage Cove.pdf');
 

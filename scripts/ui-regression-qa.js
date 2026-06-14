@@ -255,12 +255,15 @@ async function gotoBossPage(page, session, pagePath, waitSelector) {
       await page.locator(`.customer-picker-option[data-id="${customer.id}"]`).click();
       await page.waitForSelector('[data-piece]');
       await page.locator('#pickupSelectAllBtn').click();
-      await page.waitForSelector('#signatureCard:not([style*="display:none"])');
+      await page.locator('#submitBtn').click();
+      await page.waitForSelector('.modal-backdrop.open');
+      await page.locator('.modal-backdrop.open [data-role="ok"]').click();
+      await page.waitForSelector('#qrCard:not([style*="display:none"]) svg', { timeout: 10000 });
       await assertNoHorizontalOverflow(page, `${viewport.name} pickup`);
       await assertButtonsFit(page, `${viewport.name} pickup action`, '.action-bar');
       await assertButtonsFit(page, `${viewport.name} pickup bulk`, '.pickup-bulk-actions');
       await assertButtonsFit(page, `${viewport.name} pickup order actions`, '.pickup-order-actions');
-      await assertActionBarReachable(page, `${viewport.name} pickup`, '#signatureCard');
+      await assertActionBarReachable(page, `${viewport.name} pickup`, '#qrCard');
       checks.push(`${viewport.name} pickup`);
 
       if (errors.length) throw new Error(errors.join(' | '));
