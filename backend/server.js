@@ -21,6 +21,8 @@ const app = express();
 const port = Number(process.env.PORT || 8781);
 const frontendDir = path.join(__dirname, '..', 'frontend');
 
+app.set('trust proxy', 'loopback');
+
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
