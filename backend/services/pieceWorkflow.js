@@ -1,4 +1,5 @@
 const DEFAULT_STEPS = ['cut', 'edge', 'tempered'];
+const MIRROR_STEPS = ['cut', 'polish', 'edge'];
 const LEGACY_STEPS = DEFAULT_STEPS;
 const ALL_STEPS = ['cut', 'edge', 'tempered', 'polish'];
 const DISPLAY_STAGES = ['cut', 'edge', 'tempered', 'polish', 'finished'];
@@ -50,9 +51,9 @@ function normalizeCompletedSteps(value) {
 
 function inferCompletedFromStage(stage, requiredSteps) {
   if (stage === 'finished') return [...requiredSteps];
-  const idx = ALL_STEPS.indexOf(stage);
+  const idx = requiredSteps.indexOf(stage);
   if (idx <= 0) return [];
-  return ALL_STEPS.slice(0, idx).filter((step) => requiredSteps.includes(step));
+  return requiredSteps.slice(0, idx);
 }
 
 function hydratePieceWorkflow(piece) {
@@ -152,6 +153,7 @@ module.exports = {
   DEFAULT_STEPS,
   DISPLAY_STAGES,
   LEGACY_STEPS,
+  MIRROR_STEPS,
   advancePieceState,
   completedStepsJSON,
   hydratePieceWorkflow,

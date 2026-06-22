@@ -212,6 +212,7 @@ async function main() {
       if (JSON.stringify(dashboardSearchQa.stats) !== JSON.stringify(dashboardStatsBeforeSearch)) {
         throw new Error(`dashboard stats changed during search: ${JSON.stringify({ before: dashboardStatsBeforeSearch, after: dashboardSearchQa.stats })}`);
       }
+      await page.waitForFunction(() => document.activeElement?.id !== 'search', null, { timeout: 10000 });
       checks.push('Dashboard fuzzy order search');
 
       // Dashboard filters: stats act as shortcuts and the dense filter row is collapsed.
@@ -365,6 +366,20 @@ async function main() {
       await waitSelectedCount(page, 1);
       await page.locator('[data-piece]').nth(2).check();
       await waitSelectedCount(page, 2);
+      await page.waitForFunction(() => {
+        const panel = document.querySelector('#directSignPanel');
+        return document.querySelector('[data-sign-mode="direct"]')?.classList.contains('active')
+          && panel && getComputedStyle(panel).display !== 'none';
+      }, null, { timeout: 10000 });
+      const defaultPickupSummary = await page.locator('#selectedSummary').textContent();
+      if (!/确认取货|Confirm Pickup/i.test(defaultPickupSummary || '')) {
+        throw new Error(`piece-level pickup should default to direct signing: ${defaultPickupSummary}`);
+      }
+      await page.locator('[data-sign-mode="qr"]').click();
+      await page.waitForFunction(() => (
+        document.querySelector('[data-sign-mode="qr"]')?.classList.contains('active')
+          && /签字二维码|Signing QR/i.test(document.querySelector('#selectedSummary')?.textContent || '')
+      ), null, { timeout: 10000 });
       await page.locator('#submitBtn').click();
       await page.waitForSelector('.modal-backdrop.open');
       const pickupModal = await page.locator('.modal-backdrop.open').textContent();

@@ -774,7 +774,8 @@ body.has-bottom-nav .page-pad-bottom[style] { padding-bottom: 108px !important; 
 
 .topbar .logout-btn,
 .topbar .lang-btn,
-.topbar .select-btn {
+.topbar .select-btn,
+.topbar .scan-btn {
   height: 32px;
   padding: 0 12px;
   border: none; cursor: pointer;
@@ -790,6 +791,22 @@ body.has-bottom-nav .page-pad-bottom[style] { padding-bottom: 108px !important; 
 .topbar .lang-btn:hover { background: var(--surface-3); }
 .topbar .select-btn { background: var(--surface-2); color: var(--text-1); }
 .topbar .select-btn.on { background: var(--brand); color: var(--text-on-dark); }
+.topbar .scan-btn {
+  gap: 6px;
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+.topbar .scan-btn:hover { background: var(--surface-3); }
+.topbar .scan-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .topbar .topbar-action {
   min-height: 32px;
   padding: 0 12px;
@@ -924,6 +941,22 @@ body.motion-ready .fab { animation: fab-in var(--dur-lux) var(--ease-spring) 100
   .topbar .topbar-action {
     padding-left: 9px;
     padding-right: 9px;
+  }
+  .topbar .scan-btn,
+  .topbar .lang-btn,
+  .topbar .logout-btn {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+}
+@media (max-width: 360px) {
+  .topbar .scan-btn {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .topbar .scan-btn span {
+    display: none;
   }
 }
 
@@ -1477,6 +1510,46 @@ body.select-mode .piece { cursor: copy; }
   .modal-backdrop { align-items: center; }
   .modal { border-radius: var(--r-lg); transform: scale(.96); }
   .modal-backdrop.open .modal { transform: scale(1); }
+}
+.scan-modal-head,
+.scan-manual-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.scan-modal-head {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.scan-title {
+  font-size: 20px;
+  font-weight: 800;
+}
+.scan-video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--r-md);
+  background: #111;
+  object-fit: cover;
+}
+.scan-manual-row {
+  align-items: stretch;
+  margin-top: 12px;
+}
+.scan-manual-row .form-input {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+}
+.scan-manual-row .btn {
+  flex: 0 0 auto;
+  min-height: 48px;
+}
+@media (max-width: 420px) {
+  .scan-manual-row {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ============================================================
@@ -2516,6 +2589,40 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   margin-left: 6px;
   vertical-align: middle;
 }
+.pickup-piece-row {
+  align-items: stretch;
+  gap: 10px;
+  padding: 0;
+}
+.pickup-piece-row.is-held {
+  opacity: .72;
+}
+.pickup-piece-select {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+  flex: 1;
+  padding: 14px 0 14px 16px;
+}
+.pickup-piece-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.pickup-piece-copy .row-title,
+.pickup-piece-copy .row-sub {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pickup-piece-hold-btn {
+  align-self: center;
+  flex: 0 0 auto;
+  min-width: 74px;
+  margin-right: 12px;
+  padding-inline: 10px;
+}
 .pickup-order-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2526,6 +2633,86 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   min-height: 34px;
   padding: 6px 10px;
   font-size: 12px;
+}
+.pickup-sign-method-card {
+  margin-top: 12px;
+  overflow: hidden;
+}
+.pickup-sign-method-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pickup-sign-method-head > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+.pickup-sign-mode-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+}
+.pickup-sign-mode-option {
+  border: 0;
+  border-radius: calc(var(--r-md) - 3px);
+  background: transparent;
+  color: var(--text-2);
+  min-height: 36px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pickup-sign-mode-option.active {
+  background: var(--surface);
+  color: var(--text-1);
+  box-shadow: var(--shadow-sm);
+}
+.pickup-sign-mode-option:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
+.pickup-direct-panel {
+  display: grid;
+  gap: 10px;
+}
+.pickup-direct-copy {
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+.pickup-direct-copy .row-title,
+.pickup-direct-copy .row-sub {
+  color: inherit;
+}
+.pickup-direct-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.pickup-direct-grid .form-input {
+  margin-bottom: 0;
+}
+.pickup-direct-sign-label {
+  margin-top: 2px;
+}
+.pickup-direct-sign-pad {
+  height: 190px;
+}
+.pickup-direct-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .pickup-qr-card {
   margin-top: 12px;
@@ -2593,9 +2780,37 @@ body.motion-ready .worker-hero-num { animation: count-pop var(--dur-lux) var(--e
   .pickup-customer-hold-actions .btn {
     flex: 1 1 128px;
   }
+  .pickup-piece-row {
+    gap: 6px;
+  }
+  .pickup-piece-select {
+    padding-left: 12px;
+  }
+  .pickup-piece-hold-btn {
+    min-width: 58px;
+    margin-right: 10px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
   .pickup-qr-head {
     align-items: stretch;
     flex-direction: column;
+  }
+  .pickup-sign-method-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pickup-sign-mode-control {
+    width: 100%;
+  }
+  .pickup-sign-mode-option {
+    padding-inline: 8px;
+  }
+  .pickup-direct-grid {
+    grid-template-columns: 1fr;
+  }
+  .pickup-direct-sign-pad {
+    height: 170px;
   }
   .pickup-qr-body {
     grid-template-columns: 1fr;

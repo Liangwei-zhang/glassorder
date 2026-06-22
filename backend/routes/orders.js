@@ -15,6 +15,7 @@ const { extractPoCodeFromFilename, poCodeKey, poLookupKeys } = require('../servi
 const {
   completedStepsJSON,
   hydratePieceWorkflow,
+  MIRROR_STEPS,
   normalizeRequiredSteps,
   processConfigJSON,
 } = require('../services/pieceWorkflow');
@@ -22,6 +23,7 @@ const { decorateOrder, syncOrderStatusFromPieces } = require('../services/orderS
 
 const router = express.Router();
 const ALLOWED_PRIORITIES = new Set(['normal', 'rush', 'rework']);
+const MIRROR_TYPE_RE = /\bmirror\b/i;
 
 const uploadsBase = (db.runtime && db.runtime.uploadsBase)
   ? db.runtime.uploadsBase
@@ -54,6 +56,11 @@ const upload = multer({
     }
   },
 });
+
+function isMirrorPiece(piece) {
+  const text = [piece.type, piece.piece_note].filter(Boolean).join(' ');
+  return MIRROR_TYPE_RE.test(text);
+}
 
 function uploadPdf(req, res, next) {
   upload.single('pdf')(req, res, (err) => {
@@ -104,6 +111,78 @@ function uploadFilePath(publicPath) {
   const root = path.resolve(uploadsBase);
   if (target !== root && !target.startsWith(`${root}${path.sep}`)) return '';
   return target;
+}
+
+function orderUploadDirFor(publicPath) {
+  const text = String(publicPath || '');
+  if (!text.startsWith('/uploads/orders/')) return '';
+  const rel = text.replace(/^\/uploads\//, '').replace(/\\/g, '/');
+  const parts = rel.split('/').filter(Boolean);
+  if (parts[0] !== 'orders' || !parts[1]) return '';
+  const target = path.resolve(uploadsBase, 'orders', parts[1]);
+  const root = path.resolve(uploadsBase, 'orders');
+  if (target !== root && target.startsWith(`${root}${path.sep}`)) return target;
+  return '';
+}
+
+function parseEventDetails(details) {
+  if (!details) return {};
+  try {
+    const parsed = typeof details === 'string' ? JSON.parse(details) : details;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function addUploadFile(files, publicPath) {
+  const target = uploadFilePath(publicPath);
+  if (target) files.add(target);
+}
+
+function collectOrderDeleteTargets(order) {
+  const files = new Set();
+  const dirs = new Set();
+  addUploadFile(files, order.pdf_path);
+  for (const piece of order.pieces || []) {
+    addUploadFile(files, piece.drawing_path);
+    const dir = orderUploadDirFor(piece.drawing_path);
+    if (dir) dirs.add(dir);
+  }
+  for (const event of order.events || []) {
+    const details = parseEventDetails(event.details);
+    addUploadFile(files, details.label_pdf_path);
+    addUploadFile(files, details.slip_pdf_path);
+    addUploadFile(files, details.signature_path);
+  }
+  return { files: [...files], dirs: [...dirs] };
+}
+
+function parsePieceIdsJSON(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+  } catch (err) {
+    return [];
+  }
+}
+
+function tableExists(name) {
+  return Boolean(db.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
+  `).get(name));
+}
+
+function signRequestsForPieces(pieceIds) {
+  if (!pieceIds.length) return [];
+  if (!tableExists('pickup_sign_requests')) return [];
+  const pieceSet = new Set(pieceIds.map(Number));
+  const rows = db.prepare(`
+    SELECT id, status, pickup_batch_id, piece_ids
+    FROM pickup_sign_requests
+  `).all();
+  return rows.filter((row) => parsePieceIdsJSON(row.piece_ids).some((id) => pieceSet.has(id)));
 }
 
 function hydrateMissingPieceTags(order, pieces) {
@@ -236,6 +315,33 @@ function addFuzzySearch(where, params, search) {
   });
 }
 
+function barcodeParts(value) {
+  const match = String(value || '').trim().toUpperCase().match(/^GO-(\d+)-(\d+)-(\d+)$/);
+  if (!match) return null;
+  return {
+    orderId: Number(match[1]),
+    pieceId: Number(match[2]),
+    pieceNo: Number(match[3]),
+  };
+}
+
+function addBarcodeSearch(where, params, value) {
+  const parts = barcodeParts(value);
+  if (!parts) return false;
+  params.barcode_order_id = parts.orderId;
+  params.barcode_piece_id = parts.pieceId;
+  params.barcode_piece_no = parts.pieceNo;
+  where.push(`EXISTS (
+    SELECT 1
+    FROM pieces bp
+    WHERE bp.order_id = o.id
+      AND bp.order_id = @barcode_order_id
+      AND bp.id = @barcode_piece_id
+      AND bp.piece_no = @barcode_piece_no
+  )`);
+  return true;
+}
+
 function normalizePriority(value) {
   if (value === undefined || value === null || String(value).trim() === '') return 'normal';
   const priority = String(value).trim();
@@ -360,6 +466,10 @@ router.get('/', requireRole('boss'), (req, res) => {
   if (search) {
     addFuzzySearch(where, params, search);
   }
+  const barcode = queryString(req.query.barcode);
+  if (barcode && !addBarcodeSearch(where, params, barcode)) {
+    return res.status(400).json({ error: 'barcode is invalid' });
+  }
   const orderNumber = queryString(req.query.order_number);
   const po = queryString(req.query.po);
   const exactOrderNumber = po || orderNumber;
@@ -399,6 +509,43 @@ router.get('/:id', requireRole('boss'), (req, res) => {
   const order = getOrderWithPieces(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   res.json({ order });
+});
+
+router.delete('/:id', requireRole('boss'), (req, res) => {
+  const order = getOrderWithPieces(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const pieceIds = (order.pieces || []).map((piece) => Number(piece.id)).filter(Boolean);
+  const pickedPieces = (order.pieces || []).filter((piece) => piece.picked_up_at).length;
+  const pickupItems = db.prepare('SELECT COUNT(*) AS n FROM pickup_items WHERE order_id = ?').get(order.id).n;
+  const legacyPickups = db.prepare('SELECT COUNT(*) AS n FROM pickups WHERE order_id = ?').get(order.id).n;
+  const signRequests = signRequestsForPieces(pieceIds);
+  const blockingSignRequest = signRequests.find((row) => row.status === 'signed' || row.pickup_batch_id);
+  if (pickedPieces || pickupItems || legacyPickups || blockingSignRequest) {
+    return res.status(400).json({
+      error: 'Orders with pickup records cannot be deleted. Revert pickup first or keep it for history.',
+    });
+  }
+
+  const cleanupTargets = collectOrderDeleteTargets(order);
+  const cancellableSignRequestIds = signRequests
+    .filter((row) => row.status !== 'signed' && !row.pickup_batch_id)
+    .map((row) => row.id);
+  db.transaction(() => {
+    if (cancellableSignRequestIds.length) {
+      const deleteSignRequest = db.prepare('DELETE FROM pickup_sign_requests WHERE id = ?');
+      cancellableSignRequestIds.forEach((requestId) => deleteSignRequest.run(requestId));
+    }
+    db.prepare('DELETE FROM orders WHERE id = ?').run(order.id);
+  })();
+
+  cleanupTargets.files.forEach((target) => silentRm(target));
+  cleanupTargets.dirs.forEach((target) => silentRm(target));
+  res.json({
+    ok: true,
+    order_id: order.id,
+    order_number: order.order_number,
+    deleted_pieces: pieceIds.length,
+  });
 });
 
 router.post('/:id/labels', requireRole('boss'), async (req, res, next) => {
@@ -870,7 +1017,7 @@ router.post('/', requireRole('boss'), uploadPdf, (req, res, next) => {
       for (const piece of pieces) {
         const requiredSteps = piece.required_steps
           ? normalizeRequiredSteps(piece.required_steps)
-          : (defaultStepsOverride || normalizeRequiredSteps(undefined));
+          : (defaultStepsOverride || (isMirrorPiece(piece) ? MIRROR_STEPS : normalizeRequiredSteps(undefined)));
         insertPiece.run({
           order_id: orderId,
           piece_no: piece.piece_no,

@@ -21,6 +21,15 @@ function auth(session) {
   return { Authorization: `Bearer ${session.token}` };
 }
 
+function expectedAfterCut(piece) {
+  const requiredSteps = Array.isArray(piece.required_steps) && piece.required_steps.length
+    ? piece.required_steps
+    : ['cut', 'edge', 'tempered'];
+  const remaining = requiredSteps.filter((step) => step !== 'cut');
+  const stage = remaining[0] || 'finished';
+  return { stage, next_step: stage === 'finished' ? null : stage };
+}
+
 async function login() {
   return api('/api/auth/login', {
     method: 'POST',
@@ -107,8 +116,15 @@ async function waitSummary(page, n) {
   const customer = (await createCustomer(session, stamp)).customer;
 
   const workerOrder = (await createOrder(session, customer.id, stamp, 'worker')).order;
-  const cutIds = workerOrder.pieces.slice(0, 3).map((p) => p.id);
-  const temperedPieces = workerOrder.pieces.slice(3, 7);
+  const forcedCutIds = workerOrder.pieces.slice(0, 3).map((p) => Number(p.id));
+  const temperedPieces = workerOrder.pieces
+    .filter((piece) => Array.isArray(piece.required_steps) && piece.required_steps.includes('tempered') && !forcedCutIds.includes(Number(piece.id)))
+    .slice(0, 4);
+  if (!temperedPieces.length) throw new Error('select-all QA order has no tempered pieces to advance');
+  const temperedIds = temperedPieces.map((piece) => Number(piece.id)).sort((a, b) => a - b);
+  const cutPieces = workerOrder.pieces.filter((piece) => !temperedIds.includes(Number(piece.id)));
+  const cutIds = cutPieces.map((piece) => Number(piece.id)).sort((a, b) => a - b);
+  const cutExpected = new Map(cutPieces.map((piece) => [Number(piece.id), expectedAfterCut(piece)]));
   await advancePieces(session, temperedPieces, 2);
 
   const pickupA = (await createOrder(session, customer.id, stamp, 'pickup-a')).order;
@@ -142,7 +158,7 @@ async function waitSummary(page, n) {
       selectedIds: [...selectedIds].sort((a, b) => a - b),
       buttonDisabled: document.getElementById('selectAllViewBtn').disabled,
     }));
-    if (cutState.visible !== 4 || cutState.selected !== 4 || !cutState.buttonDisabled) {
+    if (cutState.visible !== cutIds.length || cutState.selected !== cutIds.length || !cutState.buttonDisabled) {
       throw new Error(`worker cut select-all failed: ${JSON.stringify(cutState)}`);
     }
     if (!cutIds.every((id) => cutState.selectedIds.includes(id))) {
@@ -155,8 +171,12 @@ async function waitSummary(page, n) {
     const movedCutPieces = cutAfterBatch.order.pieces
       .filter((piece) => cutIds.includes(Number(piece.id)))
       .map((piece) => ({ id: Number(piece.id), stage: piece.stage, next_step: piece.next_step }));
-    if (!movedCutPieces.every((piece) => piece.stage === 'edge' && piece.next_step === 'edge')) {
-      throw new Error(`worker batch complete should advance cut to edge only: ${JSON.stringify(movedCutPieces)}`);
+    const unexpectedCutPieces = movedCutPieces.filter((piece) => {
+      const expected = cutExpected.get(piece.id);
+      return !expected || piece.stage !== expected.stage || piece.next_step !== expected.next_step;
+    });
+    if (unexpectedCutPieces.length) {
+      throw new Error(`worker batch complete should advance cut by configured workflow: ${JSON.stringify({ unexpectedCutPieces, movedCutPieces })}`);
     }
 
     await page.locator('.stage-tab[data-stage="tempered"]').click();
@@ -165,10 +185,13 @@ async function waitSummary(page, n) {
     const temperedState = await page.evaluate(() => ({
       visible: document.querySelectorAll('#grid [data-id]').length,
       selected: document.querySelectorAll('#grid .piece.selected').length,
-      ids: [...selectedIds],
+      ids: [...selectedIds].sort((a, b) => a - b),
     }));
-    if (temperedState.visible !== 4 || temperedState.selected !== 4 || temperedState.ids.length !== 4) {
+    if (temperedState.visible !== temperedIds.length || temperedState.selected !== temperedIds.length || temperedState.ids.length !== temperedIds.length) {
       throw new Error(`worker tempered select-all failed: ${JSON.stringify(temperedState)}`);
+    }
+    if (!temperedIds.every((id) => temperedState.ids.includes(id))) {
+      throw new Error(`worker tempered select-all missing tempered ids: ${JSON.stringify({ temperedIds, temperedState })}`);
     }
 
     await page.goto(BASE + '/pickup-search.html', { waitUntil: 'networkidle' });
@@ -202,7 +225,7 @@ async function waitSummary(page, n) {
       selected: selected.size,
       summary: document.getElementById('selectedSummary')?.textContent || '',
     }));
-    if (pickupClear.checked !== 0 || pickupClear.selected !== 0 || !/签字二维码|Signing QR/i.test(pickupClear.summary)) {
+    if (pickupClear.checked !== 0 || pickupClear.selected !== 0 || !/确认取货|Confirm Pickup/i.test(pickupClear.summary)) {
       throw new Error(`pickup clear-all failed: ${JSON.stringify(pickupClear)}`);
     }
 

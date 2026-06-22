@@ -35,6 +35,13 @@ function auth(session) {
   return { Authorization: `Bearer ${session.token}` };
 }
 
+async function expectDeleteRejected(session, orderId) {
+  await expectStatus(`/api/orders/${orderId}`, 400, {
+    method: 'DELETE',
+    headers: auth(session),
+  });
+}
+
 async function completeOrder(session, orderId) {
   const detail = await api(`/api/orders/${orderId}`, { headers: auth(session) });
   await api('/api/pieces/batch', {
@@ -58,6 +65,17 @@ async function createOrder(session, customerId, stamp, suffix) {
   form.set('pdf', new File([pdf], `Glass Order - 260604 Pickup Hold PO HOLD-${stamp}-${suffix}.pdf`, { type: 'application/pdf' }));
   const created = await api('/api/orders', { method: 'POST', headers: auth(session), body: form });
   return completeOrder(session, created.order.id);
+}
+
+async function pickupOrder(session, orderDetail) {
+  return api('/api/pickups/batches', {
+    method: 'POST',
+    headers: { ...auth(session), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      piece_ids: orderDetail.order.pieces.map((piece) => piece.id),
+      signer_name: 'Delete Protect QA',
+    }),
+  });
 }
 
 async function seedSession(page, session) {
@@ -90,6 +108,31 @@ async function browserHoldReleaseFlow(session, customer, orderA) {
     await page.waitForFunction(() => document.querySelectorAll('[data-piece]:disabled').length === 0, null, { timeout: 10000 });
 
     const orderPanel = page.locator(`.pickup-order-panel[data-pickup-order="${orderA.order.id}"]`);
+    const firstPieceRow = orderPanel.locator('.pickup-piece-row').first();
+    await firstPieceRow.locator('.pickup-piece-hold-btn').click();
+    await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
+    await page.waitForFunction((orderId) => {
+      const panel = document.querySelector(`.pickup-order-panel[data-pickup-order="${orderId}"]`);
+      return panel && panel.querySelectorAll('[data-piece]:disabled').length === 1
+        && /解除/.test(panel.querySelector('.pickup-piece-row .pickup-piece-hold-btn')?.textContent || '');
+    }, orderA.order.id, { timeout: 10000 });
+    const afterPieceHold = await firstPieceRow.evaluate((row) => ({
+      disabled: row.querySelector('[data-piece]')?.disabled,
+      buttonText: row.querySelector('.pickup-piece-hold-btn')?.textContent.trim(),
+      heldBadge: /取片 HOLD|Pickup HOLD/.test(row.textContent || ''),
+    }));
+    if (!afterPieceHold.disabled || !afterPieceHold.heldBadge || !/解除|Release/.test(afterPieceHold.buttonText || '')) {
+      throw new Error(`piece hold button failed: ${JSON.stringify(afterPieceHold)}`);
+    }
+
+    await firstPieceRow.locator('.pickup-piece-hold-btn').click();
+    await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
+    await page.waitForFunction((orderId) => {
+      const panel = document.querySelector(`.pickup-order-panel[data-pickup-order="${orderId}"]`);
+      return panel && panel.querySelectorAll('[data-piece]:disabled').length === 0
+        && /HOLD/.test(panel.querySelector('.pickup-piece-row .pickup-piece-hold-btn')?.textContent || '');
+    }, orderA.order.id, { timeout: 10000 });
+
     await orderPanel.locator('.pickup-order-actions button').nth(2).click();
     await page.locator('.modal-backdrop.open [data-role="ok"]').last().click();
     await page.waitForFunction((orderId) => {
@@ -162,6 +205,41 @@ async function browserHoldReleaseFlow(session, customer, orderA) {
     throw new Error(`expected 16 available pieces, got ${available.total_pieces} hold=${available.hold_pieces}`);
   }
 
+  const pieceId = orderA.order.pieces[0].id;
+  const holdPiece = await api('/api/pickups/hold-piece', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ piece_id: pieceId, hold: true }),
+  });
+  if (holdPiece.changed !== 1 || holdPiece.hold !== true || !holdPiece.piece.hold) {
+    throw new Error(`unexpected hold-piece result: ${JSON.stringify(holdPiece)}`);
+  }
+  available = await api(`/api/pickups/available?customer_id=${customerId}`, { headers });
+  if (available.total_pieces !== 15) {
+    throw new Error(`single piece hold should hide 1 piece by default, got ${available.total_pieces}`);
+  }
+  const pieceWithHold = await api(`/api/pickups/available?customer_id=${customerId}&include_hold=1`, { headers });
+  if (pieceWithHold.total_pieces !== 16 || pieceWithHold.hold_pieces !== 1) {
+    throw new Error(`include_hold after piece hold expected 16/1, got ${pieceWithHold.total_pieces}/${pieceWithHold.hold_pieces}`);
+  }
+  await expectStatus('/api/pickups/batches', 400, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ piece_ids: [pieceId], signer_name: 'Hold QA' }),
+  });
+  const unholdPiece = await api('/api/pickups/hold-piece', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ piece_id: pieceId, hold: false }),
+  });
+  if (unholdPiece.changed !== 1 || unholdPiece.hold !== false || unholdPiece.piece.hold) {
+    throw new Error(`unexpected unhold-piece result: ${JSON.stringify(unholdPiece)}`);
+  }
+  available = await api(`/api/pickups/available?customer_id=${customerId}`, { headers });
+  if (available.total_pieces !== 16 || available.hold_pieces !== 0) {
+    throw new Error(`single piece unhold should restore 16 pieces, got ${available.total_pieces} hold=${available.hold_pieces}`);
+  }
+
   const holdOrder = await api('/api/pickups/hold-order', {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
@@ -229,6 +307,9 @@ async function browserHoldReleaseFlow(session, customer, orderA) {
   }
 
   await browserHoldReleaseFlow(session, customer, orderA);
+  const pickedOrder = await createOrder(session, customerId, stamp, 'PICKED');
+  await pickupOrder(session, pickedOrder);
+  await expectDeleteRejected(session, pickedOrder.order.id);
 
   console.log(`PICKUP HOLD QA PASS customer=${customerId} orders=${orderA.order.id},${orderB.order.id}`);
 })().catch((err) => {

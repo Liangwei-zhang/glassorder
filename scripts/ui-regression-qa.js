@@ -255,6 +255,7 @@ async function gotoBossPage(page, session, pagePath, waitSelector) {
       await page.locator(`.customer-picker-option[data-id="${customer.id}"]`).click();
       await page.waitForSelector('[data-piece]');
       await page.locator('#pickupSelectAllBtn').click();
+      await page.locator('[data-sign-mode="qr"]').click();
       await page.locator('#submitBtn').click();
       await page.waitForSelector('.modal-backdrop.open');
       await page.locator('.modal-backdrop.open [data-role="ok"]').click();

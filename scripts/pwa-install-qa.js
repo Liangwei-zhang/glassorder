@@ -69,7 +69,7 @@ async function checkLogoAssets(page) {
   if (!state.manifestIcons.some((icon) => icon.src === 'icons/icon-maskable-512.png' && /maskable/.test(icon.purpose || ''))) {
     throw new Error(`manifest maskable icon missing ${JSON.stringify(state.manifestIcons)}`);
   }
-  if (!/(official-logo|login-ui|qr-sign|customer-no-install)/.test(state.serviceWorkerVersion)) {
+  if (!/(official-logo|login-ui|qr-sign|customer-no-install|direct-sign|piece-hold|mirror-edge|mirror-polish-edge|delete-order|barcode-scan|scan-style)/.test(state.serviceWorkerVersion)) {
     throw new Error(`service worker cache version did not update ${state.serviceWorkerVersion}`);
   }
   return state;

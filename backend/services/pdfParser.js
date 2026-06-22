@@ -52,6 +52,12 @@ function locationFromLines(lines) {
   return '';
 }
 
+function marksFromLines(lines) {
+  const line = lines.find((value) => /^Marks?:\s*/i.test(value));
+  if (!line) return '';
+  return line.replace(/^Marks?:\s*/i, '').trim();
+}
+
 function noteFromLines(lines, sizeLineIndex) {
   const ignored = [
     /^Measurements are in inches$/i,
@@ -65,6 +71,11 @@ function noteFromLines(lines, sizeLineIndex) {
     /^As per attached drawings$/i,
     /^Templates For Glass Cut-Outs$/i,
     /^Template [A-Z]:/i,
+    /^\d+\s*x\s+.*Surcharge$/i,
+    /^\d+\s*x\s+Complex$/i,
+    /^\d+\s*x\s+Flat Polish$/i,
+    /^0%\s+price$/i,
+    /^[\d\s/.-]+"?\s*\([^)]+\)$/i,
     /^Sunshine Tempered Glass Ltd$/i,
     /^Page \d+ of \d+$/i,
   ];
@@ -104,7 +115,7 @@ function parsePiecePage(pageText, pageNumber, defaultLocation = '') {
     type: materialMatch[2].trim(),
     size: `${normalizeDimension(sizeMatch[1])} × ${normalizeDimension(sizeMatch[2])}`,
     weight: sizeMatch[3],
-    tag: locationFromLines(lines) || defaultLocation,
+    tag: locationFromLines(lines) || marksFromLines(lines) || defaultLocation,
     piece_note: noteFromLines(lines, sizeLineIndex),
   };
 }
@@ -136,6 +147,35 @@ function publicPath(publicBase, filename) {
   return `${publicBase.replace(/\/$/, '')}/${filename}`;
 }
 
+function addBlockPieces({ pieces, block, outputDir, publicBase, usePageImage }) {
+  const pageImage = usePageImage ? convertedPageImage(outputDir, block.pageNumber) : '';
+  for (let copy = 0; copy < block.qty; copy += 1) {
+    const pieceNo = pieces.length + 1;
+    const pieceImageName = `piece${pieceNo}.jpg`;
+    const pieceImage = path.join(outputDir, pieceImageName);
+    let drawingPath = '';
+    if (pageImage && fs.existsSync(pageImage)) {
+      fs.copyFileSync(pageImage, pieceImage);
+      drawingPath = publicPath(publicBase, pieceImageName);
+    }
+    pieces.push({
+      piece_no: pieceNo,
+      stage: 'cut',
+      hold: false,
+      rework: false,
+      broken: false,
+      size: block.size,
+      type: block.type,
+      thickness: block.thickness,
+      weight: block.weight,
+      tag: block.tag,
+      piece_note: block.piece_note,
+      drawing_path: drawingPath,
+      source_page: block.pageNumber,
+    });
+  }
+}
+
 function parsePdf(pdfPath, options = {}) {
   const outputDir = options.outputDir || path.join(path.dirname(pdfPath), 'parsed');
   const publicBase = options.publicBase || '';
@@ -151,29 +191,16 @@ function parsePdf(pdfPath, options = {}) {
     const block = parsePiecePage(pages[pageIndex], pageNumber, cover.location);
     if (!block) continue;
 
-    const pageImage = convertedPageImage(outputDir, pageNumber);
-    for (let copy = 0; copy < block.qty; copy += 1) {
-      const pieceNo = pieces.length + 1;
-      const pieceImageName = `piece${pieceNo}.jpg`;
-      const pieceImage = path.join(outputDir, pieceImageName);
-      if (fs.existsSync(pageImage)) {
-        fs.copyFileSync(pageImage, pieceImage);
-      }
-      pieces.push({
-        piece_no: pieceNo,
-        stage: 'cut',
-        hold: false,
-        rework: false,
-        broken: false,
-        size: block.size,
-        type: block.type,
-        thickness: block.thickness,
-        weight: block.weight,
-        tag: block.tag,
-        piece_note: block.piece_note,
-        drawing_path: publicPath(publicBase, pieceImageName),
-        source_page: block.pageNumber,
-      });
+    addBlockPieces({ pieces, block, outputDir, publicBase, usePageImage: true });
+  }
+
+  if (!pieces.length) {
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+      const pageNumber = pageIndex + 1;
+      const block = parsePiecePage(pages[pageIndex], pageNumber, cover.location);
+      if (!block) continue;
+
+      addBlockPieces({ pieces, block, outputDir, publicBase, usePageImage: false });
     }
   }
 

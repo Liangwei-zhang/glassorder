@@ -111,6 +111,7 @@ case "$UPLOADS_PATH" in
 esac
 
 BUSINESS_TABLES=(
+  pickup_sign_requests
   pickup_items
   pickup_batches
   pickups
@@ -155,7 +156,8 @@ const Database = require(path.join(process.argv[3], 'node_modules/better-sqlite3
 const db = new Database(process.argv[2], { readonly: true });
 const tables = [
   'customers', 'orders', 'pieces', 'events', 'pickups',
-  'pickup_batches', 'pickup_items', 'pickup_batch_counters',
+  'pickup_batches', 'pickup_items', 'pickup_sign_requests',
+  'pickup_batch_counters',
   'users', 'schema_migrations'
 ];
 const out = {};
@@ -252,6 +254,7 @@ const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
 const businessTables = [
+  'pickup_sign_requests',
   'pickup_items',
   'pickup_batches',
   'pickups',
@@ -293,7 +296,8 @@ const counts = JSON.parse(process.argv[2]);
 const uploads = Number(process.argv[3]);
 const cleared = [
   'customers', 'orders', 'pieces', 'events', 'pickups',
-  'pickup_batches', 'pickup_items', 'pickup_batch_counters'
+  'pickup_batches', 'pickup_items', 'pickup_sign_requests',
+  'pickup_batch_counters'
 ];
 for (const table of cleared) {
   if (counts[table] !== 0) throw new Error(`${table} was not cleared: ${counts[table]}`);

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Pickup</title>
-<link rel="stylesheet" href="shared.css?v=20260608-pickup-hold-release">
+<link rel="stylesheet" href="shared.css?v=20260614-piece-hold">
 </head>
 <body>
 <div class="topbar">
@@ -28,6 +28,43 @@
     <div id="customerPicker"></div>
   </div>
   <div id="available"></div>
+  <div class="card pickup-sign-method-card" id="signMethodCard" style="display:none;">
+    <div class="pickup-sign-method-head">
+      <div>
+        <div class="row-title" data-i18n="pickupSignMethodTitle">签字方式</div>
+        <div class="row-sub" id="signMethodIntro"></div>
+      </div>
+      <div class="pickup-sign-mode-control" role="group" aria-label="Signing method">
+        <button class="pickup-sign-mode-option active" type="button" data-sign-mode="direct" aria-pressed="true" onclick="setSignMode('direct')">
+          <span data-i18n="pickupDirectSignMode">直接签字</span>
+        </button>
+        <button class="pickup-sign-mode-option" type="button" data-sign-mode="qr" aria-pressed="false" onclick="setSignMode('qr')">
+          <span data-i18n="pickupQrSignMode">二维码签字</span>
+        </button>
+      </div>
+    </div>
+    <div class="pickup-direct-panel" id="directSignPanel">
+      <div class="pickup-direct-copy">
+        <div class="row-title" data-i18n="pickupDirectTitle">客户现场签字</div>
+        <div class="row-sub" data-i18n="pickupDirectBody">客户直接在当前设备签字，确认后马上生成提货批次。</div>
+      </div>
+      <div class="pickup-direct-grid">
+        <label>
+          <span class="form-label" data-i18n="signerName">取货人姓名</span>
+          <input class="form-input" id="directSignerName" autocomplete="name" data-i18n-placeholder="signerNamePh" placeholder="如: 张师傅">
+        </label>
+        <label>
+          <span class="form-label" data-i18n="contactPhone">联系电话</span>
+          <input class="form-input" id="directSignerPhone" autocomplete="tel" data-i18n-placeholder="signerPhonePh" placeholder="可选">
+        </label>
+      </div>
+      <label class="form-label pickup-direct-sign-label" data-i18n="customerSignRequired">客户签名</label>
+      <canvas id="directSig" class="sig-pad pickup-direct-sign-pad"></canvas>
+      <div class="pickup-direct-actions">
+        <button class="btn btn-ghost btn-inline-compact" type="button" onclick="clearDirectSignature()" data-i18n="clearSig">清空</button>
+      </div>
+    </div>
+  </div>
   <div class="card pickup-qr-card" id="qrCard" style="display:none;">
     <div class="pickup-qr-head">
       <div>
@@ -54,13 +91,13 @@
 
 <div class="action-bar">
   <a class="btn btn-ghost back" href="pickup-batches.html" data-i18n="back">返回</a>
-  <button class="btn btn-success" id="submitBtn" onclick="createSignRequest(event)">
-    <span id="selectedSummary" data-i18n="pickupQrCreateBtn">生成签字二维码</span>
+  <button class="btn btn-success" id="submitBtn" onclick="submitPickupSign(event)">
+    <span id="selectedSummary" data-i18n="pickupDirectConfirmBtn">确认取货</span>
   </button>
 </div>
 
-<script src="js/api.js?v=20260608-pickup-hold-release"></script>
-<script src="js/i18n.js?v=20260608-pickup-hold-release"></script>
+<script src="js/api.js?v=20260614-piece-hold"></script>
+<script src="js/i18n.js?v=20260614-piece-hold"></script>
 <script>
 const allowed = requireRolePage('boss');
 const params = new URLSearchParams(location.search);
@@ -81,6 +118,13 @@ let availableRequestSeq = 0;
 let currentSignRequest = null;
 let signPollTimer = null;
 let signCountdownTimer = null;
+let signMode = 'direct';
+let directCanvas = null;
+let directCtx = null;
+let directDrawing = false;
+let directLast = null;
+let directSignatureEmpty = true;
+let directSignatureBound = false;
 
 async function loadCustomers() {
   const [customerData, orderData] = await Promise.all([
@@ -168,6 +212,7 @@ async function loadAvailable() {
   const requestSeq = ++availableRequestSeq;
   selected.clear();
   clearSignRequestState();
+  resetDirectSignatureForm();
   updatePickupFlow();
   const id = customerPicker ? customerPicker.getValue() : '';
   lastCustomerId = String(id || '');
@@ -242,14 +287,20 @@ function renderAvailable() {
           <button class="btn btn-ghost btn-inline-compact" type="button" ${disabledAttr(heldCount === 0)} onclick="holdPickupOrder(${order.order_id}, false, event)">${esc(t('unholdOrderPickupBtn'))}</button>
         </div>
       </div>
-      ${pieces.map(p => `
-        <label class="row" style="cursor:${p.hold ? 'not-allowed' : 'pointer'}; ${p.hold ? 'opacity:.68;' : ''}">
-          <input type="checkbox" data-piece="${p.id}" data-order="${order.order_id}" ${selected.has(Number(p.id)) && !p.hold ? 'checked' : ''} ${p.hold ? 'disabled' : ''} onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
-          <div style="flex:1;">
-            <div class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}${p.hold ? ` <span class="badge badge-warn pickup-hold-badge">${esc(t('pickupHoldState'))}</span>` : ''}</div>
-            <div class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}${p.hold ? ` · ${esc(t('pickupHoldState'))}` : ''}</div>
-          </div>
-        </label>`).join('')}
+      ${pieces.map(p => {
+        const isHeld = Boolean(p.hold);
+        return `
+        <div class="row pickup-piece-row${isHeld ? ' is-held' : ''}" data-pickup-piece-row="${p.id}">
+          <label class="pickup-piece-select" style="cursor:${isHeld ? 'not-allowed' : 'pointer'};">
+            <input type="checkbox" data-piece="${p.id}" data-order="${order.order_id}" ${selected.has(Number(p.id)) && !isHeld ? 'checked' : ''} ${isHeld ? 'disabled' : ''} onchange="togglePiece(${p.id}, this.checked)" style="accent-color:var(--accent);">
+            <span class="pickup-piece-copy">
+              <span class="row-title">${esc(tn('pieceN', { n: p.piece_no }))}${isHeld ? ` <span class="badge badge-warn pickup-hold-badge">${esc(t('pickupHoldState'))}</span>` : ''}</span>
+              <span class="row-sub">${esc(p.size || '')} · ${esc(p.thickness || '')} ${esc(p.type || '')}${isHeld ? ` · ${esc(t('pickupHoldState'))}` : ''}</span>
+            </span>
+          </label>
+          <button class="btn ${isHeld ? 'btn-ghost' : 'btn-warn'} btn-inline-compact pickup-piece-hold-btn" type="button" data-piece-hold="${p.id}" onclick="holdPickupPiece(${p.id}, ${isHeld ? 'false' : 'true'}, event)">${esc(t(isHeld ? 'unholdPiecePickupBtn' : 'holdPiecePickupBtn'))}</button>
+        </div>`;
+      }).join('')}
     </div>`;
     }).join('')}`;
   updatePickupFlow();
@@ -283,6 +334,10 @@ function syncPickupChecks() {
     input.disabled = locked || Boolean(piece && piece.hold);
     input.checked = !(piece && piece.hold) && selected.has(Number(input.dataset.piece));
   });
+  document.querySelectorAll('[data-piece-hold]').forEach((btn) => {
+    btn.disabled = locked;
+    btn.style.opacity = locked ? '.5' : '';
+  });
 }
 
 function updatePickupBulkButtons() {
@@ -315,7 +370,7 @@ function togglePiece(id, on) {
   if (selected.size > 0 && !lastHadPieces) {
     lastHadPieces = true;
     requestAnimationFrame(() => {
-      const target = document.getElementById('qrCard');
+      const target = document.getElementById('signMethodCard');
       if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   } else if (!selected.size) {
@@ -361,6 +416,181 @@ function clearPickupOrder(orderId) {
   clearPickupIds(order ? (order.pieces || []).map((piece) => piece.id) : []);
 }
 
+function directSignaturePos(event) {
+  const rect = directCanvas.getBoundingClientRect();
+  const point = (event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]) || event;
+  return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+}
+
+function resizeDirectSignatureCanvas() {
+  if (!directCanvas || !directCtx) return;
+  const ratio = window.devicePixelRatio || 1;
+  const rect = directCanvas.getBoundingClientRect();
+  const w = rect.width || directCanvas.offsetWidth;
+  const h = rect.height || directCanvas.offsetHeight;
+  if (!w || !h) return;
+  const targetW = Math.round(w * ratio);
+  const targetH = Math.round(h * ratio);
+  if (directCanvas.width === targetW && directCanvas.height === targetH) return;
+  const hadSignature = !directSignatureEmpty && directCanvas.width && directCanvas.height;
+  const previous = hadSignature ? directCanvas.toDataURL('image/png') : '';
+  directCanvas.width = targetW;
+  directCanvas.height = targetH;
+  directCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  directCtx.lineWidth = 3.2;
+  directCtx.strokeStyle = '#111827';
+  directCtx.lineCap = 'round';
+  directCtx.lineJoin = 'round';
+  if (previous) {
+    const img = new Image();
+    img.onload = () => {
+      directCtx.drawImage(img, 0, 0, w, h);
+      directSignatureEmpty = false;
+    };
+    img.src = previous;
+  }
+}
+
+function startDirectSignature(event) {
+  if (!directCanvas || !directCtx) return;
+  directDrawing = true;
+  directLast = directSignaturePos(event);
+  if (directCanvas.setPointerCapture && event.pointerId !== undefined) {
+    try { directCanvas.setPointerCapture(event.pointerId); } catch (_) {}
+  }
+  event.preventDefault();
+}
+
+function moveDirectSignature(event) {
+  if (!directDrawing || !directCtx || !directLast) return;
+  const point = directSignaturePos(event);
+  directCtx.beginPath();
+  directCtx.moveTo(directLast.x, directLast.y);
+  directCtx.lineTo(point.x, point.y);
+  directCtx.stroke();
+  directLast = point;
+  directSignatureEmpty = false;
+  event.preventDefault();
+}
+
+function endDirectSignature(event) {
+  directDrawing = false;
+  directLast = null;
+  if (directCanvas && directCanvas.releasePointerCapture && event && event.pointerId !== undefined) {
+    try { directCanvas.releasePointerCapture(event.pointerId); } catch (_) {}
+  }
+}
+
+function clearDirectSignature() {
+  bindDirectSignaturePad();
+  if (!directCtx || !directCanvas) return;
+  directCtx.clearRect(0, 0, directCanvas.width, directCanvas.height);
+  directSignatureEmpty = true;
+}
+
+function resetDirectSignatureForm() {
+  const name = document.getElementById('directSignerName');
+  const phone = document.getElementById('directSignerPhone');
+  if (name) name.value = '';
+  if (phone) phone.value = '';
+  clearDirectSignature();
+}
+
+function bindDirectSignaturePad() {
+  if (directSignatureBound) {
+    resizeDirectSignatureCanvas();
+    return;
+  }
+  directCanvas = document.getElementById('directSig');
+  if (!directCanvas) return;
+  directCtx = directCanvas.getContext('2d');
+  directSignatureBound = true;
+  directSignatureEmpty = true;
+  resizeDirectSignatureCanvas();
+  window.addEventListener('resize', resizeDirectSignatureCanvas);
+  directCanvas.addEventListener('pointerdown', startDirectSignature);
+  directCanvas.addEventListener('pointermove', moveDirectSignature);
+  directCanvas.addEventListener('pointerup', endDirectSignature);
+  directCanvas.addEventListener('pointercancel', endDirectSignature);
+  directCanvas.addEventListener('pointerleave', endDirectSignature);
+  directCanvas.addEventListener('touchstart', startDirectSignature, { passive:false });
+  directCanvas.addEventListener('touchmove', moveDirectSignature, { passive:false });
+  directCanvas.addEventListener('touchend', endDirectSignature);
+  directCanvas.addEventListener('touchcancel', endDirectSignature);
+}
+
+function setSubmitLabel(label) {
+  const btn = document.getElementById('submitBtn');
+  if (!btn) return;
+  let summary = document.getElementById('selectedSummary');
+  if (!summary) {
+    btn.textContent = '';
+    summary = document.createElement('span');
+    summary.id = 'selectedSummary';
+    btn.appendChild(summary);
+  }
+  summary.textContent = label;
+}
+
+function renderSignMode() {
+  const hasPieces = selected.size > 0;
+  const hasPendingQr = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
+  const card = document.getElementById('signMethodCard');
+  if (card) card.style.display = hasPieces || currentSignRequest ? '' : 'none';
+  const intro = document.getElementById('signMethodIntro');
+  if (intro) {
+    intro.textContent = hasPieces
+      ? tn(signMode === 'qr' ? 'pickupQrSelectedHintN' : 'pickupDirectSelectedHintN', { n: selected.size })
+      : '';
+  }
+  document.querySelectorAll('[data-sign-mode]').forEach((btn) => {
+    const active = btn.dataset.signMode === signMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    btn.disabled = hasPendingQr;
+  });
+  const panel = document.getElementById('directSignPanel');
+  if (panel) panel.style.display = signMode === 'direct' ? '' : 'none';
+  const qrCard = document.getElementById('qrCard');
+  if (qrCard) qrCard.style.display = signMode === 'qr' && currentSignRequest ? '' : 'none';
+  if (signMode === 'direct' && hasPieces) {
+    requestAnimationFrame(() => bindDirectSignaturePad());
+  }
+}
+
+function setSignMode(mode) {
+  const next = mode === 'qr' ? 'qr' : 'direct';
+  if (currentSignRequest && currentSignRequest.status === 'pending' && next !== 'qr') {
+    toast(t('cancelQrSignBody'), { type:'info' });
+    return;
+  }
+  signMode = next;
+  if (signMode === 'direct' && currentSignRequest) clearSignRequestState();
+  updatePickupFlow();
+}
+
+async function holdPickupPiece(pieceId, hold, ev) {
+  if (currentSignRequest && currentSignRequest.status === 'pending') return;
+  const piece = pickupPieceById(pieceId);
+  const ok = await confirmModal({
+    title: hold ? t('holdPiecePickupConfirm') : t('unholdPiecePickupConfirm'),
+    body: hold ? t('holdPiecePickupBody') : t('unholdPickupBody'),
+    confirmText: hold ? t('holdPiecePickupBtn') : t('unholdPiecePickupBtn'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget ? ev.currentTarget : null;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/hold-piece', {
+      method: 'POST',
+      body: { piece_id: pieceId, hold },
+    });
+    if (hold) selected.delete(Number(pieceId));
+    if (piece) piece.hold = data.piece ? data.piece.hold : hold;
+    await loadAvailable();
+    toast(tn(hold ? 'pickupHoldAppliedN' : 'pickupHoldReleasedN', { n: data.changed }), { type: 'success' });
+  }).catch(err => toast(err.message, { type: 'danger' }));
+}
+
 async function holdPickupOrder(orderId, hold, ev) {
   const ok = await confirmModal({
     title: hold ? t('holdOrderPickupConfirm') : t('unholdOrderPickupConfirm'),
@@ -402,26 +632,26 @@ async function holdPickupCustomer(hold, ev) {
 function updatePickupFlow() {
   const hasCustomer = Boolean(customerPicker && customerPicker.getValue());
   const hasPieces = selected.size > 0;
-  const hasQr = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
+  const hasPendingQr = Boolean(currentSignRequest && currentSignRequest.status === 'pending');
   const steps = [
     { number: 1, label: t('pickupStepLookup'), done: hasCustomer },
     { number: 2, label: t('pickupStepPieces'), done: hasPieces },
-    { number: 3, label: t('pickupStepQr'), done: hasQr },
+    { number: 3, label: signMode === 'qr' ? t('pickupStepQr') : t('pickupStepSign'), done: hasPendingQr },
   ];
   steps.forEach((step, index) => {
     step.active = !step.done && ((index === 0 && !hasCustomer) || (index === 1 && hasCustomer && !hasPieces) || (index === 2 && hasPieces));
   });
-  const note = selected.size ? tn('pickupQrSelectedHintN', { n: selected.size }) : '';
+  const note = selected.size ? tn(signMode === 'qr' ? 'pickupQrSelectedHintN' : 'pickupDirectSelectedHintN', { n: selected.size }) : '';
   const stepper = document.getElementById('pickupStepper');
   stepper.classList.toggle('with-note', selected.size > 0);
   stepper.innerHTML = renderPickupSteps(steps, note);
-  document.getElementById('qrCard').style.display = currentSignRequest ? '' : 'none';
-  const summary = document.getElementById('selectedSummary');
-  if (summary) {
-    summary.textContent = t('pickupQrCreateBtn');
-  }
+  renderSignMode();
+  const label = signMode === 'qr'
+    ? (selected.size ? tn('pickupQrCreateBtnN', { n: selected.size }) : t('pickupQrCreateBtn'))
+    : (selected.size ? tn('pickupDirectConfirmBtnN', { n: selected.size }) : t('pickupDirectConfirmBtn'));
+  setSubmitLabel(label);
   const submitBtn = document.getElementById('submitBtn');
-  if (submitBtn) submitBtn.disabled = !selected.size || hasQr;
+  if (submitBtn) submitBtn.disabled = !selected.size || hasPendingQr;
   syncPickupChecks();
   updatePickupBulkButtons();
 }
@@ -512,6 +742,43 @@ function startSignPolling() {
   }, 2500);
 }
 
+async function submitPickupSign(ev) {
+  return signMode === 'qr' ? createSignRequest(ev) : createDirectPickupBatch(ev);
+}
+
+async function createDirectPickupBatch(ev) {
+  if (!selected.size) return toast(t('selectFirst'), { type:'danger' });
+  bindDirectSignaturePad();
+  const signerName = document.getElementById('directSignerName').value.trim();
+  if (!signerName) return toast(t('sigEmptyName'), { type:'danger' });
+  if (directSignatureEmpty) return toast(t('sigEmptySign'), { type:'danger' });
+  const ok = await confirmModal({
+    title: t('pickupDirectConfirmTitle'),
+    body: tn('pickupBatchConfirmBody', { n: selected.size }),
+    confirmText: t('pickupConfirmBtn'),
+  });
+  if (!ok) return;
+  const btn = ev && ev.currentTarget;
+  await withBusy(btn, async () => {
+    const data = await api('/api/pickups/batches', {
+      method: 'POST',
+      body: {
+        piece_ids: [...selected],
+        signer_name: signerName,
+        signer_phone: document.getElementById('directSignerPhone').value.trim(),
+        signature_base64: directCanvas.toDataURL('image/png'),
+      },
+    });
+    toast(t('pickupOk'), { type:'success' });
+    window.setTimeout(() => {
+      location.href = 'pickup-batch-detail.html?id=' + data.batch.id;
+    }, 450);
+  }).catch(err => {
+    toast(err.message, { type:'danger' });
+    updatePickupFlow();
+  });
+}
+
 async function createSignRequest(ev) {
   if (!selected.size) return toast(t('selectFirst'), { type:'danger' });
   const ok = await confirmModal({
@@ -531,7 +798,10 @@ async function createSignRequest(ev) {
     renderSignRequest(currentSignRequest);
     startSignPolling();
     requestAnimationFrame(() => document.getElementById('qrCard').scrollIntoView({ behavior: 'smooth', block: 'start' }));
-  }).catch(err => toast(err.message, { type:'danger' }));
+  }).catch(err => {
+    toast(err.message, { type:'danger' });
+    updatePickupFlow();
+  });
 }
 
 async function cancelSignRequest(ev) {

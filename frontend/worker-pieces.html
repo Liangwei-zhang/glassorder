@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Piece Grid</title>
-<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
+<link rel="stylesheet" href="shared.css?v=20260615-mirror-polish-edge">
 </head>
 <body>
 <div class="topbar">
@@ -112,8 +112,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260608-po-order-number"></script>
-<script src="js/i18n.js?v=20260608-po-order-number"></script>
+<script src="js/api.js?v=20260615-mirror-polish-edge"></script>
+<script src="js/i18n.js?v=20260615-mirror-polish-edge"></script>
 <script>
 ensureAuth();
 const params = new URLSearchParams(location.search);
@@ -127,6 +127,7 @@ let selectedIds = new Set();
 let rangeAnchorId = null;
 let suppressNextCellAnimation = false;
 const DEFAULT_REQUIRED_STEPS = ['cut', 'edge', 'tempered'];
+const MIRROR_REQUIRED_STEPS = ['cut', 'polish', 'edge'];
 
 const referer = document.referrer || '';
 const _user = (typeof getUser === 'function' ? getUser() : null) || {};
@@ -408,7 +409,9 @@ function openPieceModal(id) {
       || !required.includes('cut') || !required.includes('edge')
       || !required.includes('tempered');
     const advLinks = [];
-    const isMirror = required.length === 1 && required[0] === 'cut';
+    const isMirror = required.length === MIRROR_REQUIRED_STEPS.length
+      && MIRROR_REQUIRED_STEPS.every(step => required.includes(step))
+      && !required.includes('tempered');
     if (required.includes('tempered')) {
       advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','edge'])">${esc(t('skipTempered'))}</button>`);
     }
@@ -416,7 +419,7 @@ function openPieceModal(id) {
       advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut','tempered'])">${esc(t('skipOpening'))}</button>`);
     }
     if (!isMirror) {
-      advLinks.push(`<button class="link-action" onclick="setPieceConfig(['cut'])">${esc(t('mirrorOnly'))}</button>`);
+      advLinks.push(`<button class="link-action" onclick="setPieceConfig(MIRROR_REQUIRED_STEPS)">${esc(t('mirrorOnly'))}</button>`);
     }
     if (isCustom) {
       advLinks.push(`<button class="link-action" onclick="setPieceConfig(DEFAULT_REQUIRED_STEPS)">${esc(t('restoreSteps'))}</button>`);
@@ -470,7 +473,7 @@ function openBatchMenu(event) {
     { divider: true },
     { label: t('noOpening'), onClick: () => batchConfig(['cut','tempered']) },
     { label: t('noTempered'), onClick: () => batchConfig(['cut','edge']) },
-    { label: t('batchMirror'), onClick: () => batchConfig(['cut']) },
+    { label: t('batchMirror'), onClick: () => batchConfig(MIRROR_REQUIRED_STEPS) },
     { label: t('restoreAllSteps'), onClick: () => batchConfig(DEFAULT_REQUIRED_STEPS) },
     { divider: true },
     { label: t('batchBroken'), danger: true, onClick: () => batchAction('broken') },

@@ -569,7 +569,7 @@ function drawLargePieceLabel(doc, { order, piece, uploadsBase, labelSpec }) {
   drawFitText(doc.font('Helvetica-Bold'), cleanText(order.company, 'CUSTOMER').toUpperCase(), left, 52, {
     width: 190,
     height: 34,
-    max: 17,
+    max: 18,
     min: 7,
   });
   line(doc, left, 88, 205, 88, 1.1);
@@ -654,7 +654,7 @@ function drawCompactPieceLabel(doc, { order, piece, uploadsBase, labelSpec }) {
   drawFitText(doc.font('Helvetica-Bold'), cleanText(order.company, 'CUSTOMER').toUpperCase(), left, 24, {
     width: 150,
     height: 24,
-    max: 9.5,
+    max: 10.5,
     min: 5,
   });
 

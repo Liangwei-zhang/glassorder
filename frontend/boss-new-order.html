@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>New Order</title>
-<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
+<link rel="stylesheet" href="shared.css?v=20260615-mirror-polish-edge">
 </head>
 <body>
 <div class="topbar">
@@ -40,7 +40,7 @@
     <label class="form-label" style="margin-top: 14px;" data-i18n="orderTemplate">订单类型</label>
     <select class="form-select" id="orderTemplate">
       <option value="glass" data-i18n="templateGlass">钢化玻璃（默认）</option>
-      <option value="mirror" data-i18n="templateMirror">镜子（仅切）</option>
+      <option value="mirror" data-i18n="templateMirror">镜子（切 + 磨边 + 开切口）</option>
     </select>
   </div>
 
@@ -69,8 +69,8 @@
   <button class="btn btn-primary" id="createBtn" onclick="createOrder()" data-i18n="publishOrder">发布到车间</button>
 </div>
 
-<script src="js/api.js?v=20260608-po-order-number"></script>
-<script src="js/i18n.js?v=20260608-po-order-number"></script>
+<script src="js/api.js?v=20260615-mirror-polish-edge"></script>
+<script src="js/i18n.js?v=20260615-mirror-polish-edge"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 
@@ -183,7 +183,7 @@ async function createOrder() {
       form.append('project_name', document.getElementById('project').value.trim());
       form.append('note', document.getElementById('note').value.trim());
       if (document.getElementById('orderTemplate').value === 'mirror') {
-        form.append('default_required_steps', JSON.stringify(['cut']));
+        form.append('default_required_steps', JSON.stringify(['cut', 'polish', 'edge']));
       }
       form.append('pdf', file);
       const data = await api('/api/orders', { method: 'POST', body: form });

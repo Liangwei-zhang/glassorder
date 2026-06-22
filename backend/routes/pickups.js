@@ -676,6 +676,58 @@ router.get('/available/all', requireRole('boss'), (req, res) => {
   res.json({ pieces: rows, total_pieces: rows.length });
 });
 
+router.post('/hold-piece', requireRole('boss'), (req, res) => {
+  const pieceId = safeInt(body(req).piece_id);
+  if (!pieceId) return res.status(400).json({ error: 'piece_id is required' });
+  const hold = bodyBool(body(req).hold, true);
+  const piece = db.prepare(`
+    SELECT
+      p.*,
+      o.order_number,
+      o.customer_id,
+      o.archived_at,
+      c.company
+    FROM pieces p
+    JOIN orders o ON o.id = p.order_id
+    JOIN customers c ON c.id = o.customer_id
+    WHERE p.id = ?
+  `).get(pieceId);
+  if (!piece) return res.status(404).json({ error: 'Piece not found' });
+  if (piece.archived_at) return res.status(400).json({ error: 'Archived order pieces cannot be changed for pickup' });
+  if (piece.stage !== 'finished' || piece.picked_up_at) {
+    return res.status(400).json({ error: 'Only finished, unpicked pieces can be held for pickup' });
+  }
+  const nextHold = hold ? 1 : 0;
+  const info = db.prepare(`
+    UPDATE pieces
+    SET hold = ?
+    WHERE id = ?
+      AND hold != ?
+  `).run(nextHold, piece.id, nextHold);
+  if (info.changes) {
+    insertEvent(piece.order_id, piece.id, req.user.id, hold ? 'pickup_piece_hold' : 'pickup_piece_unhold', {
+      scope: 'pickup',
+      order_number: piece.order_number,
+      piece_no: piece.piece_no,
+      customer_id: piece.customer_id,
+      company: piece.company,
+      note: body(req).note || null,
+    });
+  }
+  const updated = db.prepare(`
+    SELECT
+      p.*,
+      o.order_number,
+      o.customer_id,
+      c.company
+    FROM pieces p
+    JOIN orders o ON o.id = p.order_id
+    JOIN customers c ON c.id = o.customer_id
+    WHERE p.id = ?
+  `).get(piece.id);
+  res.json({ ok: true, scope: 'piece', hold, changed: info.changes, piece: updated });
+});
+
 router.post('/hold-order', requireRole('boss'), (req, res) => {
   const orderId = safeInt(body(req).order_id);
   if (!orderId) return res.status(400).json({ error: 'order_id is required' });

@@ -98,6 +98,69 @@ function auth(session) {
     throw new Error(`polish advance expected finished, got ${polished.piece.stage}`);
   }
 
+  const mirrorPiece = detail.order.pieces[3];
+  const mirrorConfig = await api(`/api/pieces/${mirrorPiece.id}/process-config`, {
+    method: 'PATCH',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ required_steps: ['cut', 'polish', 'edge'] }),
+  });
+  if (mirrorConfig.piece.required_steps.join(',') !== 'cut,polish,edge' || mirrorConfig.piece.stage !== 'cut') {
+    throw new Error(`mirror piece should require cut+polish+edge from cut, got ${JSON.stringify({ steps: mirrorConfig.piece.required_steps, stage: mirrorConfig.piece.stage })}`);
+  }
+  const mirrorAfterCut = await api(`/api/pieces/${mirrorPiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorAfterCut.piece.stage !== 'polish' || mirrorAfterCut.piece.next_step !== 'polish') {
+    throw new Error(`mirror after cut expected polish, got ${mirrorAfterCut.piece.stage} next=${mirrorAfterCut.piece.next_step}`);
+  }
+  const mirrorAfterPolish = await api(`/api/pieces/${mirrorPiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorAfterPolish.piece.stage !== 'edge' || mirrorAfterPolish.piece.next_step !== 'edge') {
+    throw new Error(`mirror after polish expected edge, got ${mirrorAfterPolish.piece.stage} next=${mirrorAfterPolish.piece.next_step}`);
+  }
+  const mirrorDone = await api(`/api/pieces/${mirrorPiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorDone.piece.stage !== 'finished' || mirrorDone.piece.required_steps.includes('tempered')) {
+    throw new Error(`mirror after edge expected finished without tempered, got ${JSON.stringify({ stage: mirrorDone.piece.stage, steps: mirrorDone.piece.required_steps })}`);
+  }
+
+  const batchMirrorPiece = detail.order.pieces[4];
+  const batchMirror = await api('/api/pieces/batch', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'set_process_config', piece_ids: [batchMirrorPiece.id], required_steps: ['cut', 'polish', 'edge'] }),
+  });
+  const batchMirrorUpdated = batchMirror.pieces.find((row) => Number(row.id) === Number(batchMirrorPiece.id));
+  if (!batchMirrorUpdated || batchMirrorUpdated.required_steps.join(',') !== 'cut,polish,edge' || batchMirrorUpdated.stage !== 'cut') {
+    throw new Error(`batch mirror should require cut+polish+edge from cut, got ${JSON.stringify(batchMirrorUpdated)}`);
+  }
+
+  const mirrorForm = new FormData();
+  mirrorForm.set('customer_id', String(customerRes.customer.id));
+  mirrorForm.set('priority', 'normal');
+  mirrorForm.set('deadline', '2026-06-30');
+  mirrorForm.set('default_required_steps', JSON.stringify(['cut', 'polish', 'edge']));
+  mirrorForm.set('pdf', new File([
+    Buffer.concat([
+      fs.readFileSync(SAMPLE_PDF),
+      Buffer.from(`\n% workflow mirror qa ${stamp}\n`),
+    ]),
+  ], `Glass Order - 260603 Workflow Mirror QA PO WFM-${stamp}.pdf`, { type: 'application/pdf' }));
+  const mirrorCreated = await api('/api/orders', { method: 'POST', headers, body: mirrorForm });
+  const mirrorDetail = await api(`/api/orders/${mirrorCreated.order.id}`, { headers });
+  const mirrorTemplatePiece = mirrorDetail.order.pieces[0];
+  if (mirrorTemplatePiece.required_steps.join(',') !== 'cut,polish,edge') {
+    throw new Error(`mirror template order should use cut+polish+edge, got ${mirrorTemplatePiece.required_steps.join(',')}`);
+  }
+  const mirrorTemplateAfterCut = await api(`/api/pieces/${mirrorTemplatePiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorTemplateAfterCut.piece.stage !== 'polish') {
+    throw new Error(`mirror template after cut expected polish, got ${mirrorTemplateAfterCut.piece.stage}`);
+  }
+  const mirrorTemplateAfterPolish = await api(`/api/pieces/${mirrorTemplatePiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorTemplateAfterPolish.piece.stage !== 'edge') {
+    throw new Error(`mirror template after polish expected edge, got ${mirrorTemplateAfterPolish.piece.stage}`);
+  }
+  const mirrorTemplateDone = await api(`/api/pieces/${mirrorTemplatePiece.id}/advance`, { method: 'POST', headers });
+  if (mirrorTemplateDone.piece.stage !== 'finished') {
+    throw new Error(`mirror template after edge expected finished, got ${mirrorTemplateDone.piece.stage}`);
+  }
+
   detail = await api(`/api/orders/${created.order.id}`, { headers });
   const secondAfter = detail.order.pieces.find((row) => Number(row.id) === Number(secondPiece.id));
   if (!secondAfter || secondAfter.stage !== 'finished' || secondAfter.next_step !== null) {

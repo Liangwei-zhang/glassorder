@@ -86,12 +86,24 @@ function expectStatus(res, status, label) {
   if (!created.data.order.order_number_key) {
     throw new Error('created order missing order_number_key');
   }
+  const createdDetail = await api(`/api/orders/${created.data.order.id}`, { headers: auth(session) });
+  const originalPdfPath = createdDetail.order.pdf_path;
+  if (!originalPdfPath) throw new Error('created order missing pdf_path');
 
   const exact = await api(`/api/orders?po=${encodeURIComponent(po.toLowerCase().replace(/\s+/, '-'))}`, {
     headers: auth(session),
   });
   if (exact.orders.length !== 1 || exact.orders[0].id !== created.data.order.id) {
     throw new Error(`exact PO query failed: ${JSON.stringify(exact)}`);
+  }
+
+  const firstPiece = createdDetail.order.pieces[0];
+  const barcode = `GO-${created.data.order.id}-${firstPiece.id}-${firstPiece.piece_no}`;
+  const scanned = await api(`/api/orders?barcode=${encodeURIComponent(barcode)}`, {
+    headers: auth(session),
+  });
+  if (scanned.orders.length !== 1 || scanned.orders[0].id !== created.data.order.id) {
+    throw new Error(`barcode query failed: ${barcode} -> ${JSON.stringify(scanned)}`);
   }
 
   const duplicatePo = await upload(
@@ -131,7 +143,32 @@ function expectStatus(res, status, label) {
     throw new Error(`invalid filename missing response code: ${JSON.stringify(invalidFilename.data)}`);
   }
 
-  console.log(`PO CODE UPLOAD QA PASS customer=${customerId} order=${created.data.order.id} po=${po}`);
+  const deleted = await raw(`/api/orders/${created.data.order.id}`, {
+    method: 'DELETE',
+    headers: auth(session),
+  });
+  expectStatus(deleted, 200, 'delete created order');
+  if (!deleted.data || deleted.data.deleted_pieces !== createdDetail.order.pieces.length) {
+    throw new Error(`delete response invalid: ${JSON.stringify(deleted.data)}`);
+  }
+  const deletedDetail = await raw(`/api/orders/${created.data.order.id}`, { headers: auth(session) });
+  expectStatus(deletedDetail, 404, 'deleted order not found');
+  const deletedPdf = await fetch(`${BASE}${originalPdfPath}`, { headers: auth(session) });
+  if (deletedPdf.status !== 404) {
+    throw new Error(`deleted order PDF should be removed, got ${deletedPdf.status}`);
+  }
+  const reuploaded = await upload(
+    session,
+    customerId,
+    pdfBuffer(`${stamp}-reupload-after-delete`),
+    filename,
+  );
+  expectStatus(reuploaded, 201, 'same PO can be reuploaded after delete');
+  if (reuploaded.data.order.order_number !== po) {
+    throw new Error(`reuploaded order_number mismatch: ${JSON.stringify(reuploaded.data.order)}`);
+  }
+
+  console.log(`PO CODE UPLOAD QA PASS customer=${customerId} order=${reuploaded.data.order.id} po=${po}`);
 })().catch((err) => {
   console.error(err.stack || err.message);
   process.exit(1);

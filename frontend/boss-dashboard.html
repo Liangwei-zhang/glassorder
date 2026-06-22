@@ -4,12 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Orders</title>
-<link rel="stylesheet" href="shared.css?v=20260608-po-order-number">
+<link rel="stylesheet" href="shared.css?v=20260621-scan-style">
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-title" id="pageTitle" data-i18n="orderOverview">订单总览</div>
+  <button class="scan-btn" id="barcodeScanBtn" type="button" onclick="openBarcodeScan()" data-i18n-title="scanBarcodeTitle" title="扫一扫">
+    <svg class="scan-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7V5a1 1 0 0 1 1-1h2"></path>
+      <path d="M17 4h2a1 1 0 0 1 1 1v2"></path>
+      <path d="M20 17v2a1 1 0 0 1-1 1h-2"></path>
+      <path d="M7 20H5a1 1 0 0 1-1-1v-2"></path>
+      <path d="M7 8v8"></path>
+      <path d="M10 8v8"></path>
+      <path d="M14 8v8"></path>
+      <path d="M17 8v8"></path>
+    </svg>
+    <span data-i18n="scanLabel">扫一扫</span>
+  </button>
   <button class="logout-btn" onclick="logout()" data-i18n="logout">退出</button>
 </div>
 
@@ -41,7 +54,7 @@
     <button class="btn filter-btn" id="moreFilterBtn" type="button" data-i18n="filterMore">筛选</button>
   </div>
 
-  <input class="form-input search-block" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="搜索 PO / 公司名">
+  <input class="form-input search-block" id="search" type="search" enterkeyhint="search" autocomplete="off" data-i18n-placeholder="searchPlaceholder" placeholder="搜索 PO / 公司名">
   <div id="list" class="card order-list-panel"></div>
 </div>
 
@@ -71,8 +84,8 @@
   </div>
 </div>
 
-<script src="js/api.js?v=20260608-po-order-number"></script>
-<script src="js/i18n.js?v=20260608-po-order-number"></script>
+<script src="js/api.js?v=20260621-scan-style"></script>
+<script src="js/i18n.js?v=20260621-scan-style"></script>
 <script>
 const pageAllowed = requireRolePage('boss');
 const archiveMode = new URLSearchParams(location.search).get('archived') === '1';
@@ -88,11 +101,187 @@ let longPressTimer = null;
 let longPressRow = null;
 let longPressStart = null;
 let lastLongPressAt = 0;
+const dashboardSearchInput = document.getElementById('search');
+const dashboardSearchIsTouch = window.matchMedia('(pointer: coarse)').matches;
+let dashboardSearchBlurTimer = null;
+let dashboardSearchStamp = 0;
+let dashboardScanStream = null;
+let dashboardScanFrame = 0;
 
 const SCROLL_KEY = 'gd_scroll';
 window.addEventListener('beforeunload', () => {
   sessionStorage.setItem(SCROLL_KEY, String(window.scrollY || 0));
 });
+
+function clearDashboardSearchBlur() {
+  if (dashboardSearchBlurTimer) {
+    clearTimeout(dashboardSearchBlurTimer);
+    dashboardSearchBlurTimer = null;
+  }
+}
+
+function scheduleDashboardSearchBlur(delayMs = 500) {
+  if (!dashboardSearchIsTouch) return;
+  const stamp = dashboardSearchStamp;
+  clearDashboardSearchBlur();
+  dashboardSearchBlurTimer = window.setTimeout(() => {
+    if (stamp !== dashboardSearchStamp) return;
+    if (document.activeElement === dashboardSearchInput && dashboardSearchInput.value.trim()) {
+      dashboardSearchInput.blur();
+    }
+  }, delayMs);
+}
+
+function normalizeScannedBarcode(value) {
+  const match = String(value || '').toUpperCase().match(/GO-\d+-\d+-\d+/);
+  return match ? match[0] : String(value || '').trim();
+}
+
+async function findScannedOrder(rawCode) {
+  const code = normalizeScannedBarcode(rawCode);
+  if (!code) return;
+  dashboardSearchInput.value = code;
+  dashboardSearchStamp = Date.now();
+  try {
+    await withGlobalLoader(async () => {
+      const data = await api('/api/orders?include_archived=1&limit=1&barcode=' + encodeURIComponent(code));
+      const order = (data.orders || [])[0];
+      if (!order) throw new Error(t('scanOrderNotFound'));
+      toast(tn('scanOrderFound', { code: orderCodeText(order) }), { type: 'success' });
+      location.href = `boss-order-detail.html?id=${order.id}`;
+    }, { minMs: 180 });
+  } catch (err) {
+    toast(t('scanOrderNotFound'), { type: 'danger' });
+    loadOrdersOrError();
+  }
+}
+
+async function manualBarcodeSearch() {
+  const code = await promptModal({
+    title: t('scanManualTitle'),
+    body: t('scanManualBody'),
+    placeholder: t('scanManualPlaceholder'),
+    confirmText: t('scanSearch'),
+    required: true,
+    maxLength: 80,
+  });
+  if (code) await findScannedOrder(code);
+}
+
+function stopDashboardScanner() {
+  if (dashboardScanFrame) {
+    cancelAnimationFrame(dashboardScanFrame);
+    dashboardScanFrame = 0;
+  }
+  if (dashboardScanStream) {
+    dashboardScanStream.getTracks().forEach((track) => track.stop());
+    dashboardScanStream = null;
+  }
+}
+
+async function barcodeDetector() {
+  if (!window.BarcodeDetector) return null;
+  if (typeof window.BarcodeDetector.getSupportedFormats !== 'function') return new window.BarcodeDetector();
+  const formats = await window.BarcodeDetector.getSupportedFormats();
+  if (formats.includes('code_128')) return new window.BarcodeDetector({ formats: ['code_128'] });
+  return formats.length ? new window.BarcodeDetector({ formats }) : new window.BarcodeDetector();
+}
+
+async function openBarcodeScan() {
+  const detector = await barcodeDetector().catch(() => null);
+  if (!detector || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    await manualBarcodeSearch();
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-backdrop scan-backdrop';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="modal scan-modal">
+      <div class="scan-modal-head">
+        <div>
+          <div class="scan-title">${esc(t('scanBarcodeTitle'))}</div>
+          <div class="row-sub">${esc(t('scanCameraHint'))}</div>
+        </div>
+        <button class="btn btn-ghost btn-inline-compact" type="button" data-role="close">${esc(t('close'))}</button>
+      </div>
+      <video class="scan-video" autoplay muted playsinline></video>
+      <div class="scan-manual-row">
+        <input class="form-input" data-role="manual" autocomplete="off" placeholder="${escAttr(t('scanManualPlaceholder'))}">
+        <button class="btn btn-primary" type="button" data-role="manual-go">${esc(t('scanSearch'))}</button>
+      </div>
+      <div class="row-sub" data-role="status">${esc(t('scanCameraStarting'))}</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  lockAppOverlay();
+  requestAnimationFrame(() => overlay.classList.add('open'));
+
+  const video = overlay.querySelector('video');
+  const input = overlay.querySelector('[data-role="manual"]');
+  const status = overlay.querySelector('[data-role="status"]');
+  let closed = false;
+  let lastDetect = 0;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    stopDashboardScanner();
+    overlay.classList.remove('open');
+    document.removeEventListener('keydown', onKey, true);
+    unlockAppOverlay();
+    setTimeout(() => overlay.remove(), 220);
+  };
+  const submitManual = () => {
+    const code = input.value.trim();
+    if (!code) return;
+    close();
+    findScannedOrder(code);
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      close();
+    } else if (event.key === 'Enter' && document.activeElement === input) {
+      event.preventDefault();
+      submitManual();
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+  overlay.addEventListener('click', (event) => {
+    const role = event.target && event.target.dataset && event.target.dataset.role;
+    if (event.target === overlay || role === 'close') close();
+    if (role === 'manual-go') submitManual();
+  });
+
+  try {
+    dashboardScanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false,
+    });
+    video.srcObject = dashboardScanStream;
+    status.textContent = t('scanCameraLive');
+    const scan = async (ts) => {
+      if (closed) return;
+      if (video.readyState >= 2 && ts - lastDetect > 180) {
+        lastDetect = ts;
+        const hits = await detector.detect(video).catch(() => []);
+        const hit = hits.find((item) => item && item.rawValue);
+        if (hit) {
+          close();
+          await findScannedOrder(hit.rawValue);
+          return;
+        }
+      }
+      dashboardScanFrame = requestAnimationFrame(scan);
+    };
+    dashboardScanFrame = requestAnimationFrame(scan);
+  } catch (err) {
+    status.textContent = t('scanCameraUnavailable');
+    setTimeout(() => input.focus(), 60);
+  }
+}
 
 async function loadOrders(expectedSeq) {
   updatePageTitle();
@@ -272,7 +461,19 @@ function buildDashboardOrderMenu(targetOrder) {
       items.push({ label: t('menuRevertPickup'), danger: true, onClick: () => revertDashboardPickup(targetOrder) });
     }
   }
+  if (canDeleteDashboardOrder(targetOrder)) {
+    items.push({ divider: true });
+    items.push({ label: t('menuDeleteOrder'), danger: true, onClick: () => deleteDashboardOrder(targetOrder) });
+  }
   return items;
+}
+
+function canDeleteDashboardOrder(targetOrder) {
+  return targetOrder
+    && !targetOrder.archived_at
+    && targetOrder.status !== 'picked_up'
+    && targetOrder.pickup_status !== 'partial'
+    && targetOrder.pickup_status !== 'picked_up';
 }
 
 function openDashboardOrderMenu(anchorEl, orderId, options = {}) {
@@ -452,6 +653,26 @@ async function archiveDashboardOrder(targetOrder) {
   }
 }
 
+async function deleteDashboardOrder(targetOrder) {
+  if (!canDeleteDashboardOrder(targetOrder)) return;
+  const ok = await confirmModal({
+    title: tn('deleteOrderConfirm', { order: orderCodeText(targetOrder) }),
+    body: t('deleteOrderBody'),
+    confirmText: t('menuDeleteOrder'),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await withGlobalLoader(async () => {
+      await api('/api/orders/' + targetOrder.id, { method: 'DELETE' });
+      await loadOrdersOrError();
+      toast(t('orderDeleted'), { type: 'success' });
+    });
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
 async function revertDashboardPickup(targetOrder) {
   const ok = await confirmModal({
     title: t('revertPickupConfirm'),
@@ -519,11 +740,26 @@ document.getElementById('moreFilterBtn').addEventListener('click', (event) => {
     { label: t('reworkN'), onClick: () => setDashboardFilter('rework', 'active') },
   ]);
 });
-document.getElementById('search').addEventListener('input', () => {
+dashboardSearchInput.addEventListener('focus', clearDashboardSearchBlur);
+dashboardSearchInput.addEventListener('input', () => {
+  dashboardSearchStamp = Date.now();
   clearTimeout(searchDebounce);
+  clearDashboardSearchBlur();
   searchDebounce = setTimeout(() => {
-    loadOrdersOrError();
+    loadOrdersOrError().then((ok) => {
+      if (ok) scheduleDashboardSearchBlur(500);
+    });
   }, 220);
+});
+dashboardSearchInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  dashboardSearchStamp = Date.now();
+  clearTimeout(searchDebounce);
+  clearDashboardSearchBlur();
+  loadOrdersOrError().then((ok) => {
+    if (ok) scheduleDashboardSearchBlur(0);
+  });
 });
 
 function onLangChange() { updatePageTitle(); renderAlerts(); renderList(); }
@@ -539,11 +775,17 @@ function updatePageTitle() {
 function loadOrdersOrError() {
   const seq = ++dashboardLoadSeq;
   const shouldBlock = !firstLoad;
-  const run = () => loadOrders(seq).catch(err => {
-    if (seq !== dashboardLoadSeq) return;
-    document.getElementById('list').innerHTML = errorState(err.message, t('retry'), loadOrdersOrError);
-    toast(err.message, { type: 'danger' });
-  });
+  const run = async () => {
+    try {
+      await loadOrders(seq);
+      return true;
+    } catch (err) {
+      if (seq !== dashboardLoadSeq) return false;
+      document.getElementById('list').innerHTML = errorState(err.message, t('retry'), loadOrdersOrError);
+      toast(err.message, { type: 'danger' });
+      return false;
+    }
+  };
   return shouldBlock ? withGlobalLoader(run, { minMs: 260 }) : run();
 }
 
